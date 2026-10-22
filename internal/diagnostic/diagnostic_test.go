@@ -1,0 +1,32 @@
+package diagnostic
+
+import (
+	"testing"
+	"time"
+)
+
+func TestRegistrationFactsAndRecovery(t *testing.T) {
+	for _, kind := range []string{RegisterNameInvalid, RegisterDuplicate, RegisterReserved} {
+		at := time.Unix(100, 0)
+		tracker := New(at)
+		initial := tracker.Current
+		tracker.Registered(at.Add(time.Second))
+		if tracker.Current != initial {
+			t.Fatal("普通成功注册改变初始化事实")
+		}
+		tracker.RegistrationFailed(kind, at.Add(2*time.Second))
+		failed := tracker.Current
+		tracker.RegistrationFailed(RegisterReserved, at)
+		if tracker.Current != failed || failed.State != 2 {
+			t.Fatal("更早诊断改变当前记录")
+		}
+		tracker.Registered(at.Add(time.Second))
+		if tracker.Current != failed {
+			t.Fatal("更早成功错误地恢复了当前诊断")
+		}
+		tracker.Registered(at.Add(3 * time.Second))
+		if tracker.Current.State != 1 || tracker.kind != "" {
+			t.Fatal("成功注册未恢复当前问题")
+		}
+	}
+}
