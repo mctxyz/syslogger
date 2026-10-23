@@ -35,6 +35,39 @@ rpc.Unhealthy()
 
 同一项目的并行实例应显式提供不同 ID，跨重启复用。多个实例使用 common 会共享逻辑身份；各实例的指标文件路径由接入方分别配置。
 
+### 容错初始化
+
+`New(Config) (*Manager, error)` 严格校验配置。需要在配置异常时继续运行，可使用 `SafeNew(Config) *Manager`：
+
+```go
+manager := syslogger.SafeNew(syslogger.Config{
+    Project: "contract-listener",
+    InstanceID: instanceID,
+    StateEnabled: true,
+})
+```
+
+`SafeNew` 使用纠正后的配置副本创建完整的管理器，组件注册、日志提交、状态维护及关闭流程与 `New` 共用实际实现。后续 `Register`、`Handler`、`StartHTTP`、`StartFile` 和 `Close` 继续按各自契约返回错误，例如出口关闭、端口占用、目录不存在或管理器已关闭。
+
+| 配置场景 | 有效配置及诊断 |
+| --- | --- |
+| `Project` 为空字符串 | 使用 `common`，记录 Warning |
+| `Project` 非空但不合法 | 使用 `unknown`，记录 Warning |
+| `InstanceID` 为空字符串 | 正常使用默认值 `common` |
+| `InstanceID` 非空但不合法 | 使用 `common`，记录 Warning |
+| `MaxLabelValueBytes` 为零 | 正常使用默认值 2048 |
+| `MaxLabelValueBytes` 非零且小于 21 | 回退 2048，记录 Warning |
+| 指标文件已启用，但 `OutputPath` 为空或全空白 | 停用指标文件出口，记录 Error；HTTP 和 syslog 配置保持原样 |
+| 指标文件已启用，刷新间隔为负 | 回退 10 秒，记录 Warning |
+| 指标文件已启用，刷新间隔为零 | 正常使用默认值 10 秒 |
+| 纠正后仍有指标出口启用，但状态维护关闭 | 自动开启 `StateEnabled`，记录 Warning |
+
+合法身份保留原文，多个非法身份可能共享同一回退身份。已关闭的指标文件配置沿用原有处理语义；状态依赖根据纠正后仍启用的指标出口补齐。
+
+每项异常首先由标准库 `log.Printf` 输出，默认写入 stderr，接入方可通过标准日志配置调整目标。库同时通过独立的初始化诊断队列，尝试以 `component="syslogger_manager"` 交付结构化 Warning／Error syslog 日志，业务字段包含 `state="unhealthy"`、字段名、原因和纠正结果。该队列由管理器关闭，补充诊断交付失败通过标准日志反馈。
+
+开启状态维护时，发生配置纠正的管理器持续显示 `Unhealthy`（3），后续组件注册成功保持该配置异常事实。正常采用默认值保持正常初始化状态；HTTP、指标文件仍按原有方式显式接入或启动，系统日志留存及外部资源可用性由对应环境决定。
+
 ## 日志
 
 八级方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields map[string]any) error`，字段可传 nil；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。

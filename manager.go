@@ -20,13 +20,14 @@ const (
 	outletRunning
 )
 
-// Manager 持有固定实例配置、组件集合及库拥有的出口和关闭流程，由 New 创建。
+// Manager 持有固定实例配置、组件集合及库拥有的出口和关闭流程，由 New 或 SafeNew 创建。
 type Manager struct {
 	mu                   sync.RWMutex
 	cfg                  Config
 	id                   identity.Instance
 	components           map[string]*Component
 	diagnostic           *diagnostic.Tracker
+	startupLogs          *logging.Queue
 	registrationReporter diagnostic.Reporter
 	httpReporter         diagnostic.Reporter
 	frozen               bool
@@ -48,11 +49,24 @@ func New(cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{cfg: cfg, id: identity.Instance{Project: cfg.Project, InstanceID: cfg.InstanceID}, components: make(map[string]*Component), done: make(chan struct{})}
+	return newManager(cfg), nil
+}
+
+// newManager 为两个构造入口建立相同的完整内部状态，配置由各入口完成处理。
+func newManager(cfg Config) *Manager {
+	m := &Manager{
+		cfg: cfg,
+		id: identity.Instance{
+			Project:    cfg.Project,
+			InstanceID: cfg.InstanceID,
+		},
+		components: make(map[string]*Component),
+		done:       make(chan struct{}),
+	}
 	if cfg.StateEnabled {
 		m.diagnostic = diagnostic.New(time.Now())
 	}
-	return m, nil
+	return m
 }
 
 // Register 建立独立模块；容量 1～4096 使用原值，其余值回退 512。

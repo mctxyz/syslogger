@@ -49,20 +49,15 @@ type FileConfig struct {
 }
 
 func (cfg Config) normalized() (Config, error) {
-	if cfg.InstanceID == "" {
-		cfg.InstanceID = "common"
-	}
-	if cfg.MaxLabelValueBytes == 0 {
-		cfg.MaxLabelValueBytes = defaultMaxLabelValueBytes
-	}
+	cfg = cfg.withDefaults()
 	if cfg.MaxLabelValueBytes < minimumMaxLabelValueBytes {
 		return Config{}, fmt.Errorf("syslogger: 标签上限至少为 %d 字节", minimumMaxLabelValueBytes)
 	}
 	if err := validateName(cfg.Project, cfg.MaxLabelValueBytes); err != nil {
 		return Config{}, fmt.Errorf("syslogger: Project: %w", err)
 	}
-	if len(cfg.InstanceID) < 3 || len(cfg.InstanceID) > 128 || !utf8.ValidString(cfg.InstanceID) || len(cfg.InstanceID) > cfg.MaxLabelValueBytes {
-		return Config{}, fmt.Errorf("syslogger: InstanceID 必须为 3～128 字节且符合标签上限的合法 UTF-8")
+	if err := validateInstanceID(cfg.InstanceID, cfg.MaxLabelValueBytes); err != nil {
+		return Config{}, err
 	}
 	if !cfg.StateEnabled && (cfg.HTTP.Enabled || cfg.File.Enabled) {
 		return Config{}, fmt.Errorf("syslogger: HTTP 或文件出口启用时必须开启 StateEnabled")
@@ -74,11 +69,30 @@ func (cfg Config) normalized() (Config, error) {
 		if cfg.File.FlushInterval < 0 {
 			return Config{}, fmt.Errorf("syslogger: FlushInterval 必须为非负值")
 		}
-		if cfg.File.FlushInterval == 0 {
-			cfg.File.FlushInterval = defaultFlushInterval
-		}
 	}
 	return cfg, nil
+}
+
+func (cfg Config) withDefaults() Config {
+	if cfg.InstanceID == "" {
+		cfg.InstanceID = "common"
+	}
+	if cfg.MaxLabelValueBytes == 0 {
+		cfg.MaxLabelValueBytes = defaultMaxLabelValueBytes
+	}
+	if cfg.File.Enabled && cfg.File.FlushInterval == 0 {
+		cfg.File.FlushInterval = defaultFlushInterval
+	}
+	return cfg
+}
+
+func validateInstanceID(id string, maxBytes int) error {
+	validLength := len(id) >= 3 && len(id) <= 128
+	withinLabelLimit := len(id) <= maxBytes
+	if !validLength || !withinLabelLimit || !utf8.ValidString(id) {
+		return fmt.Errorf("syslogger: InstanceID 必须为 3～128 字节且符合标签上限的合法 UTF-8")
+	}
+	return nil
 }
 
 func validateName(name string, maxBytes int) error {

@@ -29,3 +29,31 @@ func ExampleComponent_Unhealthy() {
 	fmt.Println(strings.Contains(response.Body.String(), `syslogger_component_state{project="demo",instance_id="common",component="rpc"} 3`))
 	// Output: true
 }
+
+func ExampleSafeNew() {
+	manager := syslogger.SafeNew(syslogger.Config{
+		Project:      "demo",
+		StateEnabled: true,
+		HTTP: syslogger.HTTPConfig{
+			Enabled: true,
+		},
+	})
+	defer manager.Close(context.Background())
+	rpc, err := manager.Register("rpc", 512)
+	if err != nil {
+		panic(err)
+	}
+	rpc.Healthy()
+	handler, err := manager.Handler()
+	if err != nil {
+		panic(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	containsState := strings.Contains(
+		response.Body.String(),
+		`syslogger_component_state{project="demo",instance_id="common",component="rpc"} 1`,
+	)
+	fmt.Println(containsState)
+	// Output: true
+}

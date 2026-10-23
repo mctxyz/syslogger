@@ -30,3 +30,24 @@ func TestRegistrationFactsAndRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigurationFailurePersists(t *testing.T) {
+	at := time.Unix(100, 0)
+	tracker := New(at)
+	initial := tracker.Current
+	tracker.ConfigurationFailed(at.Add(-time.Second))
+	if tracker.Current != initial || tracker.configurationFailed {
+		t.Fatal("更早的配置诊断覆盖了当前事实")
+	}
+	tracker.ConfigurationFailed(at.Add(time.Second))
+	failed := tracker.Current
+	if failed.State != 3 || !tracker.configurationFailed {
+		t.Fatal("配置异常未形成持续不健康事实")
+	}
+	tracker.Registered(at.Add(2 * time.Second))
+	tracker.RegistrationFailed(RegisterDuplicate, at.Add(3*time.Second))
+	tracker.Registered(at.Add(4 * time.Second))
+	if tracker.Current != failed {
+		t.Fatal("注册事件覆盖了配置初始化异常")
+	}
+}

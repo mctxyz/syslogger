@@ -22,15 +22,30 @@ const (
 
 // Tracker 由管理器的集合锁保护，分类只用于内部恢复条件。
 type Tracker struct {
-	Current record.Record
-	kind    string
+	Current             record.Record
+	kind                string
+	configurationFailed bool
 }
 
 // New 在成功创建时建立初始化健康事实。
-func New(at time.Time) *Tracker { return &Tracker{Current: record.New(1, at)} }
+func New(at time.Time) *Tracker {
+	return &Tracker{Current: record.New(1, at)}
+}
+
+// ConfigurationFailed 保存配置纠正产生的持续不健康事实。
+func (t *Tracker) ConfigurationFailed(at time.Time) {
+	if at.Before(t.Current.ObservedAt) {
+		return
+	}
+	t.configurationFailed = true
+	t.Current = record.New(3, at)
+}
 
 // RegistrationFailed 记录已分类的注册受阻事实。
 func (t *Tracker) RegistrationFailed(kind string, at time.Time) {
+	if t.configurationFailed {
+		return
+	}
 	if !at.Before(t.Current.ObservedAt) {
 		t.Current = record.New(2, at)
 		t.kind = kind
@@ -39,6 +54,9 @@ func (t *Tracker) RegistrationFailed(kind string, at time.Time) {
 
 // Registered 在实际成功注册时恢复当前注册受阻问题。
 func (t *Tracker) Registered(at time.Time) {
+	if t.configurationFailed {
+		return
+	}
 	if t.kind != "" && !at.Before(t.Current.ObservedAt) {
 		t.Current = record.New(1, at)
 		t.kind = ""

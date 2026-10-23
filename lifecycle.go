@@ -3,6 +3,7 @@ package syslogger
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 )
 
@@ -15,6 +16,9 @@ func (m *Manager) Close(ctx context.Context) error {
 	m.mu.Lock()
 	if !m.closing {
 		m.closing = true
+		if m.startupLogs != nil {
+			m.startupLogs.Stop(ctx)
+		}
 		components := make([]*Component, 0, len(m.components))
 		for _, component := range m.components {
 			component.logs.Stop(ctx)
@@ -53,6 +57,12 @@ func (m *Manager) finish(ctx context.Context, components []*Component) {
 	for _, component := range components {
 		if err := component.logs.Wait(); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if m.startupLogs != nil {
+		// 初始化诊断属于补充通道，其交付结果通过标准日志反馈，业务关闭结果沿用原契约。
+		if err := m.startupLogs.Wait(); err != nil {
+			log.Printf("syslogger: 初始化诊断日志收尾未完成: %v", err)
 		}
 	}
 	if m.filePhase == outletRunning {
