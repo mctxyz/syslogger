@@ -18,7 +18,7 @@ const (
 type Config struct {
 	// Project 由接入项目的业务代码固定提供。
 	Project string
-	// InstanceID 来自业务命令行，空字符串使用 common，跨重启复用。
+	// InstanceID 由业务入口提供，空字符串使用 common，跨重启复用。
 	InstanceID string
 	// SyslogSocketPath 指定本机 Unix socket；空值按系统标准路径发现。
 	SyslogSocketPath string
@@ -39,10 +39,11 @@ type HTTPConfig struct {
 	ListenAddr string
 }
 
-// FileConfig 定义部署方准备的采集目录及刷新周期。
+// FileConfig 定义指标文件的完整目标路径及刷新周期。
 type FileConfig struct {
-	Enabled   bool
-	OutputDir string
+	Enabled bool
+	// OutputPath 包含目录和文件名，父目录由接入方准备；相对路径基于当前工作目录。
+	OutputPath string
 	// FlushInterval 零值为 10 秒，首次快照由 StartFile 同步写入。
 	FlushInterval time.Duration
 }
@@ -67,8 +68,8 @@ func (cfg Config) normalized() (Config, error) {
 		return Config{}, fmt.Errorf("syslogger: HTTP 或文件出口启用时必须开启 StateEnabled")
 	}
 	if cfg.File.Enabled {
-		if strings.TrimSpace(cfg.File.OutputDir) == "" {
-			return Config{}, fmt.Errorf("syslogger: 文件出口需要 OutputDir")
+		if strings.TrimSpace(cfg.File.OutputPath) == "" {
+			return Config{}, fmt.Errorf("syslogger: 文件出口需要 OutputPath")
 		}
 		if cfg.File.FlushInterval < 0 {
 			return Config{}, fmt.Errorf("syslogger: FlushInterval 必须为非负值")

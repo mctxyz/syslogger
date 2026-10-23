@@ -47,7 +47,7 @@ func (m *Manager) StartFile() error {
 }
 
 func (m *Manager) flush() error {
-	return textfile.Write(m.cfg.File.OutputDir, textfile.Filename(m.id), metrics.Encode(m.id, m.snapshot()))
+	return textfile.Write(m.cfg.File.OutputPath, metrics.Encode(m.id, m.snapshot()))
 }
 
 func (m *Manager) runFile() {

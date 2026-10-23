@@ -140,11 +140,10 @@ func TestModuleBackpressureIsolationAndBoundedClose(t *testing.T) {
 	if err := m.StartFile(); err != nil {
 		t.Fatal(err)
 	}
-	paths, _ := filepath.Glob(filepath.Join(cfg.File.OutputDir, "*.prom"))
-	if err := os.Remove(paths[0]); err != nil {
+	if err := os.Remove(cfg.File.OutputPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(cfg.File.OutputDir); err != nil {
+	if err := os.Remove(filepath.Dir(cfg.File.OutputPath)); err != nil {
 		t.Fatal(err)
 	}
 	full := false

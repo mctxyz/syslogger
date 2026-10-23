@@ -13,7 +13,7 @@ Go 1.19 标准库实现的本机 syslog 日志与组件健康状态库。module 
 import "github.com/mctxyz/syslogger"
 ```
 
-日志和指标共用 `project、instance_id、component`。业务代码固定项目名和组件名，通过既有命令行框架读取实例 ID 后传给库；空实例 ID 使用 `common`，显式非空值按 3～128 字节、UTF-8 和标签上限校验并保留原文。
+日志和指标共用 `project、instance_id、component`。业务代码固定项目名和组件名，业务入口从配置文件等来源读取实例 ID 后传给库；空实例 ID 使用 `common`，显式非空值按 3～128 字节、UTF-8 和标签上限校验并保留原文。
 
 下方为初始化片段，业务在 New 成功后接管管理器的关闭职责，后续初始化失败也按自己的流程调用 Close 收尾。
 
@@ -33,7 +33,7 @@ rpc.Unhealthy()
 
 已有服务器通过 `Handler()` 挂载，服务器归业务管理。模块在取得 Handler 或开始启动指标出口之前完成注册；配置及采集集合之后固定。模块注册后日志即可使用，业务退出时调用 `Close(ctx)`。
 
-同一项目的并行实例应显式提供不同 ID，跨重启复用。多个实例使用 common 会共享逻辑身份，在同一文件采集目录还会写入同一路径。
+同一项目的并行实例应显式提供不同 ID，跨重启复用。多个实例使用 common 会共享逻辑身份；各实例的指标文件路径由接入方分别配置。
 
 ## 日志
 
@@ -66,9 +66,24 @@ rpc.Unhealthy()
 
 全部样本只带三个身份标签。业务组件输出四条样本，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
 
-HTTP 与文件出口默认关闭，启用时须同时开启 StateEnabled。`StartHTTP()` 同步绑定后后台提供 `/metrics`。`StartFile()` 首次同步写入完整快照，成功后周期刷新，周期默认 10 秒；目录由部署方准备。两个出口各自启动，失败可显式再次尝试，重复启动返回错误。
+HTTP 与文件出口默认关闭，启用时须同时开启 StateEnabled。`StartHTTP()` 同步绑定后后台提供 `/metrics`。`StartFile()` 首次同步写入完整快照，成功后周期刷新，周期默认 10 秒。两个出口各自启动，失败可显式再次尝试，重复启动返回错误。
 
-文件名为 `syslogger-<64 位 SHA-256>.prom`，身份输入为 Project、InstanceID 的长度前缀编码。写入沿用同目录临时文件、0644、完整关闭后 Rename，失败保留旧完整文件。新旧身份文件的迁移按精确路径核对，避免重复采集。汇报时间不是文件刷新时间，文件新鲜度结合 node_exporter 的 textfile mtime 解释；同时采集 HTTP 和文件时应避免重复聚合。
+文件出口通过 `Config.File.OutputPath` 指定完整路径及文件名，父目录由接入方准备；相对路径基于当前工作目录。例如：
+
+```go
+fileConfig := syslogger.FileConfig{
+    Enabled: true,
+    OutputPath: "/var/lib/node_exporter/textfile_collector/listener-a.prom",
+}
+```
+
+将该配置赋给 `Config.File`。库按给定路径交付文件；不同实例应配置不同路径，同一路径的写入会互相覆盖。供 node_exporter 采集的文件应使用 `.prom` 扩展名。
+
+写入沿用同目录临时文件、0644、完整关闭后 Rename，失败保留旧完整文件。汇报时间不是文件刷新时间，文件新鲜度结合 node_exporter 的 textfile mtime 解释；同时采集 HTTP 和文件时应避免重复聚合。
+
+### 现有采集目录迁移
+
+切换到指定路径后，已有的哈希命名指标文件仍会保留。接入方应按精确实例及文件路径核对旧文件，并在确认后移出采集目录，避免新旧文件重复采集。
 
 ## 关闭与验证
 

@@ -17,7 +17,7 @@ import (
 func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.File.Enabled = true
-	cfg.File.OutputDir = filepath.Join(cfg.File.OutputDir, "created-later")
+	cfg.File.OutputPath = filepath.Join(filepath.Dir(cfg.File.OutputPath), "created-later", "custom.prom")
 	cfg.File.FlushInterval = 5 * time.Millisecond
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
@@ -25,13 +25,13 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 	if err := m.StartFile(); err == nil || m.filePhase != outletIdle {
 		t.Fatal("首次写入失败未返回或未清理启动资格")
 	}
-	if err := os.Mkdir(cfg.File.OutputDir, 0700); err != nil {
+	if err := os.Mkdir(filepath.Dir(cfg.File.OutputPath), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.StartFile(); err != nil {
 		t.Fatal(err)
 	}
-	first := readSnapshot(t, cfg.File.OutputDir)
+	first := readSnapshot(t, cfg.File.OutputPath)
 	if !strings.Contains(string(first), `component="rpc"} 2`) {
 		t.Fatal("StartFile 返回时首次快照缺失")
 	}
@@ -40,22 +40,22 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 	}
 	c.Unhealthy()
 	waitUntil(t, func() bool {
-		return strings.Contains(string(readSnapshot(t, cfg.File.OutputDir)), `component="rpc"} 3`)
+		return strings.Contains(string(readSnapshot(t, cfg.File.OutputPath)), `component="rpc"} 3`)
 	})
 	c.Healthy()
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	final := readSnapshot(t, cfg.File.OutputDir)
+	final := readSnapshot(t, cfg.File.OutputPath)
 	if !strings.Contains(string(final), `component="rpc"} 1`) {
 		t.Fatal("最终快照未覆盖周期快照")
 	}
 	time.Sleep(3 * cfg.File.FlushInterval)
-	if !bytes.Equal(final, readSnapshot(t, cfg.File.OutputDir)) {
+	if !bytes.Equal(final, readSnapshot(t, cfg.File.OutputPath)) {
 		t.Fatal("最终交付之后仍有写入")
 	}
 	c.Unhealthy()
-	if err := m.Close(context.Background()); err != nil || !bytes.Equal(final, readSnapshot(t, cfg.File.OutputDir)) {
+	if err := m.Close(context.Background()); err != nil || !bytes.Equal(final, readSnapshot(t, cfg.File.OutputPath)) {
 		t.Fatal("重复关闭改变最终结果")
 	}
 }
@@ -68,7 +68,7 @@ func TestUnstartedFileDoesNotWriteOnClose(t *testing.T) {
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := os.ReadDir(cfg.File.OutputDir)
+	entries, err := os.ReadDir(filepath.Dir(cfg.File.OutputPath))
 	if err != nil || len(entries) != 0 {
 		t.Fatal("关闭自行启动了未启动出口")
 	}
@@ -83,8 +83,9 @@ func TestPeriodicFileFailureAndSharedFinalError(t *testing.T) {
 	if err := m.StartFile(); err != nil {
 		t.Fatal(err)
 	}
-	moved := cfg.File.OutputDir + "-offline"
-	if err := os.Rename(cfg.File.OutputDir, moved); err != nil {
+	directory := filepath.Dir(cfg.File.OutputPath)
+	moved := directory + "-offline"
+	if err := os.Rename(directory, moved); err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(moved)
@@ -138,7 +139,7 @@ func TestFinalFileIncludesLogCloseCounters(t *testing.T) {
 	_ = m.Close(ctx)
 	_ = m.Close(context.Background())
 	_, failed := c.logs.Counts()
-	text := string(readSnapshot(t, cfg.File.OutputDir))
+	text := string(readSnapshot(t, cfg.File.OutputPath))
 	line := fmt.Sprintf(`syslogger_component_log_send_failures_total{project="demo",instance_id="instance-a",component="rpc"} %d`+"\n", failed)
 	if !strings.Contains(text, line) {
 		t.Fatalf("最终文件未包含日志收尾计数: %s", text)

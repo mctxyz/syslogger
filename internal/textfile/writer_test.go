@@ -9,27 +9,25 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-
-	"github.com/mctxyz/syslogger/internal/identity"
 )
 
 func TestWriteReplacementAndCleanup(t *testing.T) {
 	dir := t.TempDir()
-	filename := Filename(identity.Instance{Project: "demo"})
+	path := filepath.Join(dir, "custom-metrics.prom")
 	foreign := filepath.Join(dir, ".other.tmp-owned-by-someone-else")
 	if err := os.WriteFile(foreign, []byte("保留"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, data := range []string{"old\n", "new\n"} {
-		if err := Write(dir, filename, []byte(data)); err != nil {
+		if err := Write(path, []byte(data)); err != nil {
 			t.Fatal(err)
 		}
-		got, err := os.ReadFile(filepath.Join(dir, filename))
+		got, err := os.ReadFile(path)
 		if err != nil || string(got) != data {
 			t.Fatalf("交付内容不符: %q, %v", got, err)
 		}
 	}
-	info, err := os.Stat(filepath.Join(dir, filename))
+	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,13 +46,14 @@ func TestWriteReplacementAndCleanup(t *testing.T) {
 func TestWriteFailuresAndRetry(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "missing")
-	if err := Write(missing, "state.prom", []byte("first")); err == nil {
+	path := filepath.Join(missing, "state.prom")
+	if err := Write(path, []byte("first")); err == nil {
 		t.Fatal("缺失目录的写入应失败")
 	}
 	if err := os.Mkdir(missing, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(missing, "state.prom", []byte("retry")); err != nil {
+	if err := Write(path, []byte("retry")); err != nil {
 		t.Fatal(err)
 	}
 	blocked := filepath.Join(dir, "blocked.prom")
@@ -65,7 +64,7 @@ func TestWriteFailuresAndRetry(t *testing.T) {
 	if err := os.WriteFile(marker, []byte("old"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(dir, "blocked.prom", []byte("new")); err == nil {
+	if err := Write(blocked, []byte("new")); err == nil {
 		t.Fatal("目录目标的替换应失败")
 	}
 	if data, err := os.ReadFile(marker); err != nil || string(data) != "old" {
@@ -85,7 +84,7 @@ func TestAtomicVisibilityOnLinux(t *testing.T) {
 	path := filepath.Join(dir, "state.prom")
 	old := bytes.Repeat([]byte("old\n"), 2048)
 	next := bytes.Repeat([]byte("new\n"), 4096)
-	if err := Write(dir, "state.prom", old); err != nil {
+	if err := Write(path, old); err != nil {
 		t.Fatal(err)
 	}
 	opened, err := os.Open(path)
@@ -121,7 +120,7 @@ func TestAtomicVisibilityOnLinux(t *testing.T) {
 		if i%2 == 0 {
 			data = next
 		}
-		if err := Write(dir, "state.prom", data); err != nil {
+		if err := Write(path, data); err != nil {
 			close(stop)
 			reader.Wait()
 			t.Fatal(err)
@@ -134,7 +133,7 @@ func TestAtomicVisibilityOnLinux(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if err := Write(dir, "state.prom", next); err != nil {
+	if err := Write(path, next); err != nil {
 		t.Fatal(err)
 	}
 	data, err := io.ReadAll(opened)

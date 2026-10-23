@@ -13,7 +13,7 @@ import (
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
-	return Config{Project: "demo", InstanceID: "instance-a", StateEnabled: true, SyslogSocketPath: filepath.Join(t.TempDir(), "missing.sock"), File: FileConfig{OutputDir: t.TempDir(), FlushInterval: time.Hour}}
+	return Config{Project: "demo", InstanceID: "instance-a", StateEnabled: true, SyslogSocketPath: filepath.Join(t.TempDir(), "missing.sock"), File: FileConfig{OutputPath: filepath.Join(t.TempDir(), "metrics.prom"), FlushInterval: time.Hour}}
 }
 
 func testManager(t *testing.T, cfg Config) *Manager {
@@ -61,13 +61,9 @@ func waitUntil(t *testing.T, condition func() bool) {
 	}
 }
 
-func readSnapshot(t *testing.T, dir string) []byte {
+func readSnapshot(t *testing.T, path string) []byte {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(dir, "*.prom"))
-	if err != nil || len(paths) != 1 {
-		t.Fatalf("实例文件数量不符: %v, %v", paths, err)
-	}
-	data, err := os.ReadFile(paths[0])
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}

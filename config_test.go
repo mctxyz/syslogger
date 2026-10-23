@@ -28,7 +28,7 @@ func TestConfigValidationAndOutletCombinations(t *testing.T) {
 		func(c *Config) { c.MaxLabelValueBytes = 20 }, func(c *Config) { c.MaxLabelValueBytes = -1 },
 		func(c *Config) { c.StateEnabled = false; c.HTTP.Enabled = true },
 		func(c *Config) { c.StateEnabled = false; c.File.Enabled = true },
-		func(c *Config) { c.File.Enabled = true; c.File.OutputDir = " " },
+		func(c *Config) { c.File.Enabled = true; c.File.OutputPath = " " },
 		func(c *Config) { c.File.Enabled = true; c.File.FlushInterval = -1 },
 	} {
 		cfg := testConfig(t)
@@ -48,7 +48,7 @@ func TestConfigValidationAndOutletCombinations(t *testing.T) {
 		}
 	}
 	cfg := testConfig(t)
-	cfg.File.OutputDir = ""
+	cfg.File.OutputPath = ""
 	cfg.File.FlushInterval = -1
 	testManager(t, cfg)
 }

@@ -1,3 +1,4 @@
+// Package textfile 负责向指定路径原子交付完整指标文件。
 package textfile
 
 import (
@@ -11,7 +12,8 @@ import (
 
 // Write 在同目录完整准备临时文件，再原子替换正式文件；调用方串行协调写入。
 // 所有实际文件错误使用进程默认日志器反馈，本次失败仅清理本次临时资源。
-func Write(dir, filename string, data []byte) (err error) {
+func Write(path string, data []byte) (err error) {
+	dir, filename := filepath.Dir(path), filepath.Base(path)
 	file, err := os.CreateTemp(dir, "."+filename+".tmp-*")
 	if err != nil {
 		return fileError("创建临时文件", err)
@@ -49,7 +51,7 @@ func Write(dir, filename string, data []byte) (err error) {
 	if closeErr != nil {
 		return fileError("关闭临时文件", closeErr)
 	}
-	if err := os.Rename(temporary, filepath.Join(dir, filename)); err != nil {
+	if err := os.Rename(temporary, path); err != nil {
 		return fileError("原子替换正式文件", err)
 	}
 	renamed = true

@@ -6,13 +6,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/mctxyz/syslogger/internal/identity"
-	"github.com/mctxyz/syslogger/internal/textfile"
 )
 
 func TestExternalHandlerAndFixedCollection(t *testing.T) {
@@ -122,11 +118,10 @@ func TestCommonIdentityAcrossLogsHTTPAndFile(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
-	if response.Body.String() != string(readSnapshot(t, cfg.File.OutputDir)) {
+	if response.Body.String() != string(readSnapshot(t, cfg.File.OutputPath)) {
 		t.Fatal("HTTP 和文件没有使用同一指标契约")
 	}
-	name := textfile.Filename(identity.Instance{Project: cfg.Project, InstanceID: "common"})
-	if _, err := os.Stat(filepath.Join(cfg.File.OutputDir, name)); err != nil {
-		t.Fatal("文件身份未使用默认实例值", err)
+	if !strings.Contains(response.Body.String(), `instance_id="common"`) {
+		t.Fatal("指标未使用默认实例身份")
 	}
 }
