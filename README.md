@@ -51,6 +51,17 @@ rpc.Unhealthy()
 
 `SyslogSocketPath` 可指定部署或隔离测试的本机路径；默认尝试 `/dev/log`、`/var/run/syslog`、`/var/run/log` 的 Unix datagram 和 stream。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。
 
+### 日志检索
+
+[tools/syslogger-log](tools/syslogger-log) 提供独立 Go 命令，支持按项目、实例、模块、等级、时间、关键词和正则过滤，以及实时跟踪、彩色输出和 JSON 输出：
+
+```sh
+go build -o tools/bin/syslogger-log ./tools/syslogger-log
+./tools/bin/syslogger-log -p contract-listener -I local-a -c rpc --since=-2h -k '超时'
+```
+
+编译使用 Go 1.19+，运行环境为 Linux 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。
+
 ## 健康与指标
 
 `Healthy()`、`Degraded()`、`Unhealthy()` 无参数、无返回值，同步提交状态及库采集的时间。状态维护默认关闭，关闭时这些方法直接返回；日志与状态分别调用。四态为 0=Unknown、1=Healthy、2=Degraded、3=Unhealthy，Unknown 表示业务组件尚未汇报。较新入口时间整体替换记录，相同时间由后提交者覆盖，同状态也更新时间。
