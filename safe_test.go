@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -40,26 +39,6 @@ func testSafeManager(t *testing.T, cfg Config) *Manager {
 	return m
 }
 
-func captureSafeLogs(t *testing.T) *capturedLog {
-	t.Helper()
-	capture := &capturedLog{
-		entered: make(chan struct{}),
-	}
-	previous := log.Writer()
-	log.SetOutput(capture)
-	t.Cleanup(func() {
-		log.SetOutput(previous)
-	})
-	return capture
-}
-
-// String 在后台诊断可能仍写入时读取完整的测试日志。
-func (capture *capturedLog) String() string {
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	return capture.data.String()
-}
-
 type safeSyslogRecord struct {
 	Level      string         `json:"level"`
 	Project    string         `json:"project"`
@@ -83,7 +62,7 @@ func receiveSafeLog(t *testing.T, receiver *net.UnixConn) ([]byte, safeSyslogRec
 }
 
 func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
-	capture := captureSafeLogs(t)
+	capture := captureLogs(t)
 	path := filepath.Join(socketDirectory(t), "startup.sock")
 	receiver := unixReceiver(t, path)
 	cfg := Config{
@@ -159,9 +138,7 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 	if currentRecord(t, m, "rpc").State != int(StateUnhealthy) {
 		t.Fatal("SafeNew 的组件状态方法不可用")
 	}
-	if err := rpc.Info("业务日志仍然可用", nil); err != nil {
-		t.Fatal(err)
-	}
+	rpc.Info("业务日志仍然可用", nil)
 	_, business := receiveSafeLog(t, receiver)
 	if business.Component != "rpc" || business.Level != "info" {
 		t.Fatalf("业务日志被初始化诊断替代：%+v", business)
@@ -197,8 +174,9 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 	if _, err := m.Register("closed", 512); err == nil {
 		t.Fatal("关闭后仍允许注册组件")
 	}
-	if err := rpc.Info("closed", nil); !errors.Is(err, ErrClosed) {
-		t.Fatalf("关闭后的日志错误不符：%v", err)
+	rpc.Info("closed", nil)
+	if rejected, failed := rpc.logs.Counts(); rejected != 1 || failed != 0 {
+		t.Fatalf("关闭后的日志计数不符：rejected=%d failed=%d", rejected, failed)
 	}
 	if err := m.StartHTTP(); !errors.Is(err, ErrClosed) {
 		t.Fatalf("关闭后的 HTTP 错误不符：%v", err)
@@ -214,7 +192,7 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 }
 
 func TestSafeNewWorkingOutlets(t *testing.T) {
-	captureSafeLogs(t)
+	captureLogs(t)
 	path := filepath.Join(socketDirectory(t), "outlets.sock")
 	receiver := unixReceiver(t, path)
 	cfg := testConfig(t)
@@ -236,9 +214,7 @@ func TestSafeNewWorkingOutlets(t *testing.T) {
 	}
 	rpc := testComponent(t, m, "rpc")
 	rpc.Healthy()
-	if err := rpc.Info("outlets", nil); err != nil {
-		t.Fatal(err)
-	}
+	rpc.Info("outlets", nil)
 	seenBusiness := false
 	for i := 0; i < 4; i++ {
 		_, record := receiveSafeLog(t, receiver)
@@ -306,7 +282,7 @@ func TestSafeNewWorkingOutlets(t *testing.T) {
 func TestSafeNewUnavailableSyslog(t *testing.T) {
 	for _, stateEnabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(stateEnabled), func(t *testing.T) {
-			capture := captureSafeLogs(t)
+			capture := captureLogs(t)
 			cfg := testConfig(t)
 			cfg.StateEnabled = stateEnabled
 			cfg.MaxLabelValueBytes = -1
@@ -325,9 +301,7 @@ func TestSafeNewUnavailableSyslog(t *testing.T) {
 			} else if m.diagnostic != nil || rpc.current.Reported {
 				t.Fatal("syslog 不可用时强制开启了状态维护")
 			}
-			if err := rpc.Info("syslog unavailable", nil); err != nil {
-				t.Fatal(err)
-			}
+			rpc.Info("syslog unavailable", nil)
 			waitUntil(t, func() bool {
 				_, failed := rpc.logs.Counts()
 				return failed == 1
@@ -343,7 +317,7 @@ func TestSafeNewUnavailableSyslog(t *testing.T) {
 }
 
 func TestSafeNewDisabledOutletsAndCancellation(t *testing.T) {
-	captureSafeLogs(t)
+	captureLogs(t)
 	m := testSafeManager(t, Config{
 		File: FileConfig{
 			Enabled:       true,
@@ -377,7 +351,7 @@ func TestSafeNewDisabledOutletsAndCancellation(t *testing.T) {
 func TestSafeNewValidConfigMatchesNew(t *testing.T) {
 	for _, stateEnabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(stateEnabled), func(t *testing.T) {
-			capture := captureSafeLogs(t)
+			capture := captureLogs(t)
 			cfg := Config{
 				Project:          " 项目 A ",
 				StateEnabled:     stateEnabled,

@@ -2,9 +2,12 @@ package syslogger
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestConcurrentStateSnapshotsAndClose(t *testing.T) {
@@ -73,5 +76,59 @@ func TestConcurrentOutletsRegisterAndClose(t *testing.T) {
 	}
 	if m.components["existing"] != existing {
 		t.Fatal("并发生命周期改变既有句柄")
+	}
+}
+
+func TestConcurrentQueueHealthAndClose(t *testing.T) {
+	captureLogs(t)
+	path := filepath.Join(socketDirectory(t), "concurrent-queue-health.sock")
+	_ = unixReceiver(t, path)
+	cfg := testConfig(t)
+	cfg.SyslogSocketPath = path
+	cfg.DegradeOnQueueFull = true
+	cfg.QueueFullRecoveryInterval = time.Millisecond
+	m := testManager(t, cfg)
+	c, err := m.Register("rpc", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saturateLogQueue(t, c)
+	var workers sync.WaitGroup
+	start := make(chan struct{})
+	for n := 0; n < 4; n++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			for i := 0; i < 100; i++ {
+				c.Info("并发提交", nil)
+				c.Unhealthy()
+				c.Healthy()
+				_ = m.snapshot()
+			}
+		}()
+	}
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		<-start
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := m.Close(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("并发关闭返回意外错误: %v", err)
+		}
+	}()
+	close(start)
+	workers.Wait()
+	if err := m.Close(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	frozen := currentRecord(t, m, "rpc")
+	c.Healthy()
+	c.mu.RLock()
+	later := c.healthAt(time.Now().Add(time.Hour))
+	c.mu.RUnlock()
+	if later != frozen || currentRecord(t, m, "rpc") != frozen {
+		t.Fatal("并发关闭后健康记录仍发生变化")
 	}
 }

@@ -52,3 +52,70 @@ func TestConfigValidationAndOutletCombinations(t *testing.T) {
 	cfg.File.FlushInterval = -1
 	testManager(t, cfg)
 }
+
+func TestQueueHealthConfig(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		enabled  bool
+		state    bool
+		interval time.Duration
+		want     time.Duration
+		invalid  bool
+	}{
+		{
+			name: "disabled",
+		},
+		{
+			name:     "disabled_interval",
+			interval: -time.Second,
+			want:     -time.Second,
+		},
+		{
+			name:    "default_interval",
+			enabled: true,
+			state:   true,
+			want:    30 * time.Second,
+		},
+		{
+			name:     "custom_interval",
+			enabled:  true,
+			state:    true,
+			interval: time.Minute,
+			want:     time.Minute,
+		},
+		{
+			name:    "missing_state",
+			enabled: true,
+			invalid: true,
+		},
+		{
+			name:     "negative_interval",
+			enabled:  true,
+			state:    true,
+			interval: -time.Second,
+			invalid:  true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Config{
+				Project:                   "demo",
+				StateEnabled:              test.state,
+				DegradeOnQueueFull:        test.enabled,
+				QueueFullRecoveryInterval: test.interval,
+			}
+			if test.invalid {
+				if manager, err := New(cfg); manager != nil || err == nil {
+					t.Fatalf("非法自动健康配置未拒绝: %+v", cfg)
+				}
+				return
+			}
+			manager := testManager(t, cfg)
+			if manager.cfg.QueueFullRecoveryInterval != test.want {
+				t.Fatalf("恢复窗口不符: got=%s want=%s", manager.cfg.QueueFullRecoveryInterval, test.want)
+			}
+			if manager.cfg.DegradeOnQueueFull != test.enabled || manager.cfg.StateEnabled != test.state {
+				t.Fatal("自动健康配置的启用状态被改变")
+			}
+		})
+	}
+}

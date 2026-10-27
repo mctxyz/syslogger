@@ -1,15 +1,75 @@
 package syslogger
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/record"
 )
+
+// capturedLog 同步捕获标准日志，供各类诊断测试共享。
+type capturedLog struct {
+	mu      sync.Mutex
+	data    bytes.Buffer
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (w *capturedLog) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	_, _ = w.data.Write(data)
+	w.mu.Unlock()
+	w.once.Do(func() {
+		close(w.entered)
+	})
+	return len(data), nil
+}
+
+// String 在后台诊断可能仍写入时读取完整的测试日志。
+func (w *capturedLog) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.data.String()
+}
+
+func captureLogs(t *testing.T) *capturedLog {
+	t.Helper()
+	capture := &capturedLog{
+		entered: make(chan struct{}),
+	}
+	previous := log.Writer()
+	log.SetOutput(capture)
+	t.Cleanup(func() {
+		log.SetOutput(previous)
+	})
+	return capture
+}
+
+// saturateLogQueue 通过隔离 socket 的真实背压触发下一次队满，并读取该次窗口起点。
+func saturateLogQueue(t *testing.T, c *Component) time.Time {
+	t.Helper()
+	before, _ := c.logs.Counts()
+	message := strings.Repeat("x", 32*1024)
+	for n := 0; n < 1000; n++ {
+		c.Info(message, nil)
+		if rejected, _ := c.logs.Counts(); rejected > before {
+			c.mu.RLock()
+			droppedAt := c.lastQueueFull
+			c.mu.RUnlock()
+			return droppedAt
+		}
+	}
+	t.Fatal("未形成可验证的队满丢弃")
+	return time.Time{}
+}
 
 func testConfig(t *testing.T) Config {
 	t.Helper()

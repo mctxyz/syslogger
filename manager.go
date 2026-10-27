@@ -130,7 +130,11 @@ func (m *Manager) snapshot() []metrics.Component {
 	m.mu.RUnlock()
 	for _, component := range components {
 		component.mu.RLock()
-		item := metrics.Component{Name: component.name, Record: component.current, HasLogs: true}
+		item := metrics.Component{
+			Name:    component.name,
+			Record:  component.healthAt(time.Now()),
+			HasLogs: true,
+		}
 		component.mu.RUnlock()
 		item.Rejected, item.SendFailures = component.logs.Counts()
 		result = append(result, item)

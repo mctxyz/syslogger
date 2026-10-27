@@ -268,6 +268,51 @@ func TestSafeConfigOutlets(t *testing.T) {
 	})
 }
 
+func TestSafeQueueHealthConfig(t *testing.T) {
+	for _, interval := range []time.Duration{-time.Second, 0, time.Minute} {
+		cfg, corrections := (Config{
+			Project:                   "demo",
+			DegradeOnQueueFull:        true,
+			QueueFullRecoveryInterval: interval,
+		}).corrected()
+		want := map[string]logging.Level{
+			"StateEnabled": logging.Warning,
+		}
+		if interval < 0 {
+			want["QueueFullRecoveryInterval"] = logging.Warning
+		}
+		if !cfg.StateEnabled || !cfg.DegradeOnQueueFull {
+			t.Fatal("队满自动健康的状态维护依赖未补齐")
+		}
+		if interval <= 0 && cfg.QueueFullRecoveryInterval != 30*time.Second {
+			t.Fatal("队满恢复窗口未使用默认值")
+		}
+		if interval > 0 && cfg.QueueFullRecoveryInterval != interval {
+			t.Fatal("合法恢复窗口被改变")
+		}
+		assertCorrections(t, cfg, corrections, want)
+	}
+}
+
+// assertSafeConfigProperties 核对严格校验、合法配置一致性和重复纠正的幂等性。
+func assertSafeConfigProperties(t *testing.T, input Config) {
+	t.Helper()
+	cfg, corrections := input.corrected()
+	normalized, err := cfg.normalized()
+	if err != nil || !reflect.DeepEqual(normalized, cfg) {
+		t.Fatalf("纠正后的配置未通过严格校验：cfg=%+v err=%v", cfg, err)
+	}
+	if valid, err := input.normalized(); err == nil {
+		if len(corrections) != 0 || !reflect.DeepEqual(cfg, valid) {
+			t.Fatal("严格构造接受的配置被额外纠正")
+		}
+	}
+	second, repeated := cfg.corrected()
+	if len(repeated) != 0 || !reflect.DeepEqual(second, cfg) {
+		t.Fatal("配置纠正不具备幂等性")
+	}
+}
+
 func FuzzSafeConfig(f *testing.F) {
 	f.Add(
 		"",
@@ -324,19 +369,20 @@ func FuzzSafeConfig(f *testing.F) {
 				FlushInterval: time.Duration(interval),
 			},
 		}
-		cfg, corrections := input.corrected()
-		normalized, err := cfg.normalized()
-		if err != nil || !reflect.DeepEqual(normalized, cfg) {
-			t.Fatalf("纠正后的配置未通过严格校验：cfg=%+v err=%v", cfg, err)
-		}
-		if valid, err := input.normalized(); err == nil {
-			if len(corrections) != 0 || !reflect.DeepEqual(cfg, valid) {
-				t.Fatal("严格构造接受的配置被额外纠正")
-			}
-		}
-		second, repeated := cfg.corrected()
-		if len(repeated) != 0 || !reflect.DeepEqual(second, cfg) {
-			t.Fatal("配置纠正不具备幂等性")
-		}
+		assertSafeConfigProperties(t, input)
+	})
+}
+
+func FuzzQueueHealthConfig(f *testing.F) {
+	f.Add(true, false, int64(-1))
+	f.Add(true, true, int64(0))
+	f.Add(false, false, int64(-1))
+	f.Fuzz(func(t *testing.T, enabled bool, stateEnabled bool, interval int64) {
+		assertSafeConfigProperties(t, Config{
+			Project:                   "demo",
+			StateEnabled:              stateEnabled,
+			DegradeOnQueueFull:        enabled,
+			QueueFullRecoveryInterval: time.Duration(interval),
+		})
 	})
 }

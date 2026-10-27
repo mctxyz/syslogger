@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -89,10 +87,7 @@ func TestPeriodicFileFailureAndSharedFinalError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(moved)
-	capture := &capturedLog{entered: make(chan struct{})}
-	previous := log.Writer()
-	log.SetOutput(capture)
-	defer log.SetOutput(previous)
+	capture := captureLogs(t)
 	select {
 	case <-capture.entered:
 	case <-time.After(5 * time.Second):
@@ -129,7 +124,8 @@ func TestFinalFileIncludesLogCloseCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := 0; n < 1000; n++ {
-		if errors.Is(c.Info(strings.Repeat("x", 32*1024), nil), ErrQueueFull) {
+		c.Info(strings.Repeat("x", 32*1024), nil)
+		if rejected, _ := c.logs.Counts(); rejected != 0 {
 			break
 		}
 	}
@@ -144,20 +140,4 @@ func TestFinalFileIncludesLogCloseCounters(t *testing.T) {
 	if !strings.Contains(text, line) {
 		t.Fatalf("最终文件未包含日志收尾计数: %s", text)
 	}
-}
-
-// capturedLog 通过真实默认日志出口观察文件错误，生产代码保持直接文件调用。
-type capturedLog struct {
-	mu      sync.Mutex
-	data    bytes.Buffer
-	once    sync.Once
-	entered chan struct{}
-}
-
-func (w *capturedLog) Write(data []byte) (int, error) {
-	w.mu.Lock()
-	_, _ = w.data.Write(data)
-	w.mu.Unlock()
-	w.once.Do(func() { close(w.entered) })
-	return len(data), nil
 }

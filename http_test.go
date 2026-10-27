@@ -103,9 +103,7 @@ func TestCommonIdentityAcrossLogsHTTPAndFile(t *testing.T) {
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
 	c.Healthy()
-	if err := c.Info("默认身份", nil); err != nil {
-		t.Fatal(err)
-	}
+	c.Info("默认身份", nil)
 	if !strings.Contains(string(receive(t, receiver)), `"instance_id":"common"`) {
 		t.Fatal("日志未使用默认实例身份")
 	}

@@ -60,9 +60,11 @@ manager := syslogger.SafeNew(syslogger.Config{
 | 指标文件已启用，但 `OutputPath` 为空或全空白 | 停用指标文件出口，记录 Error；HTTP 和 syslog 配置保持原样 |
 | 指标文件已启用，刷新间隔为负 | 回退 10 秒，记录 Warning |
 | 指标文件已启用，刷新间隔为零 | 正常使用默认值 10 秒 |
-| 纠正后仍有指标出口启用，但状态维护关闭 | 自动开启 `StateEnabled`，记录 Warning |
+| 队满自动降级已启用，`QueueFullRecoveryInterval` 为负 | 回退 30 秒，记录 Warning |
+| 队满自动降级已启用，`QueueFullRecoveryInterval` 为零 | 正常使用默认值 30 秒 |
+| 纠正后仍有指标出口或队满自动降级启用，但状态维护关闭 | 自动开启 `StateEnabled`，记录 Warning |
 
-合法身份保留原文，多个非法身份可能共享同一回退身份。已关闭的指标文件配置沿用原有处理语义；状态依赖根据纠正后仍启用的指标出口补齐。
+合法身份保留原文，多个非法身份可能共享同一回退身份。已关闭的指标文件配置沿用原有处理语义；状态依赖根据纠正后仍启用的指标出口和队满自动降级功能补齐。
 
 每项异常首先由标准库 `log.Printf` 输出，默认写入 stderr，接入方可通过标准日志配置调整目标。库同时通过独立的初始化诊断队列，尝试以 `component="syslogger_manager"` 交付结构化 Warning／Error syslog 日志，业务字段包含 `state="unhealthy"`、字段名、原因和纠正结果。该队列由管理器关闭，补充诊断交付失败通过标准日志反馈。
 
@@ -70,7 +72,14 @@ manager := syslogger.SafeNew(syslogger.Config{
 
 ## 日志
 
-八级方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields map[string]any) error`，字段可传 nil；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
+八级方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields map[string]any)`，无返回值，字段可传 nil；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
+
+```go
+rpc.Info("RPC 已连接", map[string]any{
+    "endpoint": "primary",
+})
+rpc.Healthy()
+```
 
 ```json
 {"timestamp":"2026-10-22T08:00:00Z","level":"error","project":"contract-listener","instance_id":"common","component":"rpc","message":"RPC 请求超时","fields":{"error":"context deadline exceeded","duration_ms":3000}}
@@ -78,9 +87,9 @@ manager := syslogger.SafeNew(syslogger.Config{
 
 正文实际为单行 JSON，时间为 UTC RFC3339Nano，等级为小写名称。顶层 error 字段使用 Error() 文本，nil 或空字段省略 fields。编码在调用线程完成，调用期间字段由业务保证无并发修改；返回后修改原字段不会改变已编码日志。协议头使用 LOG_USER facility 和真实 severity，syslog tag 来自项目名；协议头中的空白和控制字符规范化为下划线，JSON 身份保留原文。
 
-每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Register(name, capacity)` 两参数必传，1～4096 使用原值，其余回退 512。队满立即拒收新日志并返回错误，已接收记录保持 FIFO。发送成功只表示本机 socket 写入成功，中心接收和持久化由设备日志链路管理。
+每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Register(name, capacity)` 两参数必传，1～4096 使用原值，其余回退 512。队满立即拒收新日志，更新拒收 Counter 并通过标准日志诊断，已接收记录保持 FIFO。发送成功只表示本机 socket 写入成功，中心接收和持久化由设备日志链路管理。
 
-拒收发生在编码或入队阶段，由调用返回 error；发送失败发生在后台连接或写入阶段，通过独立诊断和 Counter 反馈，失败条目即放弃。连接恢复服务后续日志，不重放失败记录。本机连接及写入等待各受有限超时约束，业务前台仍承担编码成本，库不承诺硬实时调用上限。
+编码失败、队满或管理器关闭后的日志调用通过标准库 `log.Printf` 输出独立诊断，并累计模块拒收次数；提交诊断按模块每秒最多输出一次，Counter 保留全部次数。空组件句柄和零值组件通过标准日志报告句柄异常。后台连接或写入失败沿用独立标准日志诊断和发送失败 Counter，失败条目即放弃。连接恢复服务后续日志，不重放失败记录。本机连接及写入等待各受有限超时约束，业务前台仍承担编码和必要的标准日志输出成本，库不承诺硬实时调用上限。
 
 `SyslogSocketPath` 可指定部署或隔离测试的本机路径；默认尝试 `/dev/log`、`/var/run/syslog`、`/var/run/log` 的 Unix datagram 和 stream。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。
 
@@ -97,14 +106,35 @@ go build -o tools/bin/syslogger-log ./tools/syslogger-log
 
 ## 健康与指标
 
-`Healthy()`、`Degraded()`、`Unhealthy()` 无参数、无返回值，同步提交状态及库采集的时间。状态维护默认关闭，关闭时这些方法直接返回；日志与状态分别调用。四态为 0=Unknown、1=Healthy、2=Degraded、3=Unhealthy，Unknown 表示业务组件尚未汇报。较新入口时间整体替换记录，相同时间由后提交者覆盖，同状态也更新时间。
+`Healthy()`、`Degraded()`、`Unhealthy()` 无参数、无返回值，同步提交业务状态及库采集的时间。状态维护默认关闭，关闭时这些方法直接返回；日志与业务状态分别调用。四态为 0=Unknown、1=Healthy、2=Degraded、3=Unhealthy，Unknown 表示组件尚未形成业务或自动健康报告。较新业务入口时间整体替换业务记录，相同时间由后提交者覆盖，同状态也更新时间。
+
+### 队满自动降级
+
+```go
+manager := syslogger.SafeNew(syslogger.Config{
+    Project: "contract-listener",
+    StateEnabled: true,
+    DegradeOnQueueFull: true,
+    QueueFullRecoveryInterval: 30 * time.Second,
+})
+```
+
+`DegradeOnQueueFull` 默认关闭，启用时需要 `StateEnabled`。`QueueFullRecoveryInterval` 指定连续无队满丢弃的恢复等待时间，零值为 30 秒；`New` 拒绝负值，`SafeNew` 回退默认值并报告配置纠正。
+
+各组件首次队满丢弃时产生自动 Degraded，再次队满丢弃重新计算恢复窗口；连续达到配置时长没有队满丢弃后，自动状态恢复 Healthy。恢复由最后一次队满时刻决定，窗口内成功接收日志或停止产生日志都可以自然到达恢复时刻；队列积压继续按原有发送流程交付。
+
+业务主动上报的 Degraded 或 Unhealthy 持续优先，只有业务主动上报 Healthy 才解除该业务故障。有效状态同时包含仍生效的队满降级，因此窗口内调用 Healthy 后仍显示 Degraded，窗口结束后才显示 Healthy。编码失败、关闭后调用及后台发送失败继续使用各自的诊断和 Counter；自动恢复窗口由队满丢弃事件更新。
+
+采集使用业务健康记录及最后队满时刻计算有效状态，HTTP 请求、周期文件快照和管理器内部采集使用同一规则。自动降级时间是最后队满时刻，自动恢复时间是该时刻加恢复窗口；最近的业务 Healthy 汇报继续保留其时间。首次关闭冻结当时的有效状态，最终文件快照及后续内部采集保持该截止结果。
+
+### 指标出口
 
 每个组件独立读写锁，采集复制单组件完整记录后释放锁，输出 I/O 在锁外执行。内置组件 `syslogger_manager` 表达管理器初始化、注册失败及实际注册恢复，具体来源走独立诊断。
 
 | 指标 | 类型 | 含义 |
 | --- | --- | --- |
 | `syslogger_component_state` | Gauge | 当前四态数值 |
-| `syslogger_component_timestamp_seconds` | Gauge | 当前健康记录的 Unix 整数秒，业务组件未汇报时为 0 |
+| `syslogger_component_timestamp_seconds` | Gauge | 当前有效健康记录的 Unix 整数秒，尚无健康报告时为 0 |
 | `syslogger_component_log_rejected_total` | Counter | 模块入队前拒收的调用累计次数 |
 | `syslogger_component_log_send_failures_total` | Counter | 模块后台发送失败的条目累计数 |
 

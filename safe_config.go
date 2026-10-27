@@ -72,11 +72,20 @@ func (cfg Config) corrected() (Config, []configCorrection) {
 			level:     logging.Warning,
 		})
 	}
-	if !cfg.StateEnabled && (cfg.HTTP.Enabled || cfg.File.Enabled) {
+	if cfg.DegradeOnQueueFull && cfg.QueueFullRecoveryInterval < 0 {
+		cfg.QueueFullRecoveryInterval = defaultQueueFullRecoveryInterval
+		corrections = append(corrections, configCorrection{
+			field:     "QueueFullRecoveryInterval",
+			reason:    "队满自动降级恢复等待时间为负数",
+			effective: cfg.QueueFullRecoveryInterval.String(),
+			level:     logging.Warning,
+		})
+	}
+	if !cfg.StateEnabled && (cfg.HTTP.Enabled || cfg.File.Enabled || cfg.DegradeOnQueueFull) {
 		cfg.StateEnabled = true
 		corrections = append(corrections, configCorrection{
 			field:     "StateEnabled",
-			reason:    "已启用的指标出口需要状态维护",
+			reason:    "已启用的指标出口或队满自动降级需要状态维护",
 			effective: true,
 			level:     logging.Warning,
 		})

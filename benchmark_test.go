@@ -18,7 +18,7 @@ func BenchmarkLogDelivery(b *testing.B) {
 					b.Run(fmt.Sprintf("message_%d/capacity_%d/modules_%d/parallel_%v", size, capacity, modules, parallel), func(b *testing.B) {
 						path := filepath.Join(socketDirectory(b), "log.sock")
 						receiver := unixReceiver(b, path)
-						var received, accepted, refused atomic.Uint64
+						var received atomic.Uint64
 						readerDone := make(chan struct{})
 						go func() {
 							defer close(readerDone)
@@ -47,11 +47,7 @@ func BenchmarkLogDelivery(b *testing.B) {
 						var sequence atomic.Uint64
 						submit := func() {
 							n := sequence.Add(1)
-							if err := components[n%uint64(modules)].Info(message, nil); err != nil {
-								refused.Add(1)
-							} else {
-								accepted.Add(1)
-							}
+							components[n%uint64(modules)].Info(message, nil)
 						}
 						b.ReportAllocs()
 						b.ResetTimer()
@@ -71,15 +67,28 @@ func BenchmarkLogDelivery(b *testing.B) {
 						if err := manager.Close(context.Background()); err != nil {
 							b.Fatal(err)
 						}
+						// 提交接口通过模块 Counter 保留拒收事实，排空后统一核对交付数量。
+						var refused uint64
+						for _, component := range components {
+							rejected, failed := component.logs.Counts()
+							if failed != 0 {
+								b.Fatalf("模块发生后台发送失败: %d", failed)
+							}
+							refused += rejected
+						}
+						accepted := uint64(b.N) - refused
 						deadline := time.Now().Add(5 * time.Second)
-						for received.Load() < accepted.Load() {
+						for received.Load() < accepted {
 							if time.Now().After(deadline) {
 								b.Fatal("接收条数与成功提交不符")
 							}
 							time.Sleep(time.Millisecond)
 						}
-						b.ReportMetric(float64(accepted.Load())/float64(b.N), "accepted/op")
-						b.ReportMetric(float64(refused.Load())/float64(b.N), "rejected/op")
+						if received.Load() != accepted {
+							b.Fatal("接收条数与成功提交不符")
+						}
+						b.ReportMetric(float64(accepted)/float64(b.N), "accepted/op")
+						b.ReportMetric(float64(refused)/float64(b.N), "rejected/op")
 						b.ReportMetric(float64(received.Load())/time.Since(started).Seconds(), "received/s")
 					})
 				}

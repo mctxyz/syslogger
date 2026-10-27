@@ -12,6 +12,8 @@ const (
 	defaultMaxLabelValueBytes = 2048
 	// 保持既有身份标签容量的合法配置范围。
 	minimumMaxLabelValueBytes = 21
+	// 队满后的默认观察期以连续无丢弃时间判断恢复。
+	defaultQueueFullRecoveryInterval = 30 * time.Second
 )
 
 // Config 固定一个项目运行实例的身份、状态维护及指标出口配置。
@@ -24,6 +26,10 @@ type Config struct {
 	SyslogSocketPath string
 	// StateEnabled 开启同步状态维护，零值关闭。
 	StateEnabled bool
+	// DegradeOnQueueFull 按模块队满丢弃自动降级，零值关闭，启用时需要 StateEnabled。
+	DegradeOnQueueFull bool
+	// QueueFullRecoveryInterval 是连续无队满丢弃的恢复等待时间，启用自动降级时零值为 30 秒。
+	QueueFullRecoveryInterval time.Duration
 	// HTTP 配置已有服务挂载或专用监听的指标能力。
 	HTTP HTTPConfig
 	// File 配置周期文件交付，零值关闭。
@@ -62,6 +68,14 @@ func (cfg Config) normalized() (Config, error) {
 	if !cfg.StateEnabled && (cfg.HTTP.Enabled || cfg.File.Enabled) {
 		return Config{}, fmt.Errorf("syslogger: HTTP 或文件出口启用时必须开启 StateEnabled")
 	}
+	if cfg.DegradeOnQueueFull {
+		if !cfg.StateEnabled {
+			return Config{}, fmt.Errorf("syslogger: 队满自动降级启用时必须开启 StateEnabled")
+		}
+		if cfg.QueueFullRecoveryInterval < 0 {
+			return Config{}, fmt.Errorf("syslogger: QueueFullRecoveryInterval 必须为非负值")
+		}
+	}
 	if cfg.File.Enabled {
 		if strings.TrimSpace(cfg.File.OutputPath) == "" {
 			return Config{}, fmt.Errorf("syslogger: 文件出口需要 OutputPath")
@@ -82,6 +96,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.File.Enabled && cfg.File.FlushInterval == 0 {
 		cfg.File.FlushInterval = defaultFlushInterval
+	}
+	if cfg.DegradeOnQueueFull && cfg.QueueFullRecoveryInterval == 0 {
+		cfg.QueueFullRecoveryInterval = defaultQueueFullRecoveryInterval
 	}
 	return cfg
 }

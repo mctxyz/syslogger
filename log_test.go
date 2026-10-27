@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,13 +21,20 @@ func TestEightLevelsAndFieldSnapshot(t *testing.T) {
 	cfg.StateEnabled = false
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
-	methods := []func(string, map[string]any) error{c.Emergency, c.Alert, c.Critical, c.Error, c.Warning, c.Notice, c.Info, c.Debug}
+	methods := []func(string, map[string]any){
+		c.Emergency,
+		c.Alert,
+		c.Critical,
+		c.Error,
+		c.Warning,
+		c.Notice,
+		c.Info,
+		c.Debug,
+	}
 	names := []string{"emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"}
 	for level, method := range methods {
 		fields := map[string]any{"error": errors.New("原始错误"), "nested": map[string]any{"value": "原值"}}
-		if err := method("消息\n第二行", fields); err != nil {
-			t.Fatal(err)
-		}
+		method("消息\n第二行", fields)
 		fields["error"] = "已改变"
 		fields["nested"].(map[string]any)["value"] = "已改变"
 		data := receive(t, receiver)
@@ -50,9 +58,7 @@ func TestEightLevelsAndFieldSnapshot(t *testing.T) {
 	if c.current.Reported {
 		t.Fatal("日志自动更新了业务状态")
 	}
-	if err := c.Info("不能编码", map[string]any{"value": make(chan int)}); err == nil {
-		t.Fatal("非法字段被接收")
-	}
+	c.Info("不能编码", map[string]any{"value": make(chan int)})
 	rejected, failed := c.logs.Counts()
 	if rejected != 1 || failed != 0 {
 		t.Fatalf("阶段计数不符: %d %d", rejected, failed)
@@ -60,25 +66,26 @@ func TestEightLevelsAndFieldSnapshot(t *testing.T) {
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Info("关闭后", nil); !errors.Is(err, ErrClosed) {
-		t.Fatalf("关闭后错误不符: %v", err)
+	c.Info("关闭后", nil)
+	if rejected, failed := c.logs.Counts(); rejected != 2 || failed != 0 {
+		t.Fatalf("关闭后计数不符: rejected=%d failed=%d", rejected, failed)
 	}
 }
 
 func TestSendFailureDropsAndConnectionRecovers(t *testing.T) {
+	capture := captureLogs(t)
 	path := filepath.Join(socketDirectory(t), "log.sock")
 	cfg := testConfig(t)
 	cfg.SyslogSocketPath = path
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
-	if err := c.Error("失败即放弃", nil); err != nil {
-		t.Fatal(err)
-	}
-	waitUntil(t, func() bool { _, failed := c.logs.Counts(); return failed == 1 })
+	c.Error("失败即放弃", nil)
+	waitUntil(t, func() bool {
+		_, failed := c.logs.Counts()
+		return failed == 1 && strings.Contains(capture.String(), `component="rpc"`)
+	})
 	receiver := unixReceiver(t, path)
-	if err := c.Info("恢复后新日志", nil); err != nil {
-		t.Fatal(err)
-	}
+	c.Info("恢复后新日志", nil)
 	if data := receive(t, receiver); !strings.Contains(string(data), "恢复后新日志") || strings.Contains(string(data), "失败即放弃") {
 		t.Fatalf("失败日志被补发: %s", data)
 	}
@@ -101,9 +108,7 @@ func TestRepresentativeModuleRates(t *testing.T) {
 			m := testManager(t, cfg)
 			c := testComponent(t, m, "rpc")
 			for n := 0; n < test.count; n++ {
-				if err := c.Info(strings.Repeat("x", 512), map[string]any{"sequence": n}); err != nil {
-					t.Fatal(err)
-				}
+				c.Info(strings.Repeat("x", 512), map[string]any{"sequence": n})
 				data := receive(t, receiver)
 				if !strings.Contains(string(data), fmt.Sprintf(`"sequence":%d`, n)) {
 					t.Fatal("FIFO 顺序不符")
@@ -123,6 +128,7 @@ func TestRepresentativeModuleRates(t *testing.T) {
 }
 
 func TestModuleBackpressureIsolationAndBoundedClose(t *testing.T) {
+	capture := captureLogs(t)
 	path := filepath.Join(socketDirectory(t), "log.sock")
 	_ = unixReceiver(t, path)
 	cfg := testConfig(t)
@@ -148,19 +154,19 @@ func TestModuleBackpressureIsolationAndBoundedClose(t *testing.T) {
 	}
 	full := false
 	for n := 0; n < 1000; n++ {
-		if err := a.Info(strings.Repeat("x", 32*1024), nil); errors.Is(err, ErrQueueFull) {
+		a.Info(strings.Repeat("x", 32*1024), nil)
+		if rejected, _ := a.logs.Counts(); rejected != 0 {
 			full = true
 			break
-		} else if err != nil {
-			t.Fatal(err)
 		}
 	}
 	if !full {
 		t.Fatal("未形成可验证的积压")
 	}
-	if err := b.Info("独立模块仍可接收", nil); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(capture.String(), `component="saturated"`) {
+		t.Fatal("队满拒收未通过标准日志诊断")
 	}
+	b.Info("独立模块仍可接收", nil)
 	a.Unhealthy()
 	if currentRecord(t, m, "saturated").State != 3 {
 		t.Fatal("日志积压阻止了同步状态提交")
@@ -177,5 +183,115 @@ func TestModuleBackpressureIsolationAndBoundedClose(t *testing.T) {
 	var pathErr *os.PathError
 	if !errors.Is(final, context.DeadlineExceeded) || !errors.Is(final, os.ErrNotExist) || !errors.As(final, &pathErr) {
 		t.Fatalf("重复关闭未保留多个出口的错误身份: %v", final)
+	}
+}
+
+func TestLogRejectionDiagnostics(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		fields     map[string]any
+		closed     bool
+		wantReason string
+	}{
+		{
+			name: "encoding",
+			fields: map[string]any{
+				"value": make(chan int),
+			},
+			wantReason: "chan int",
+		},
+		{
+			name:       "closed",
+			closed:     true,
+			wantReason: ErrClosed.Error(),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture := captureLogs(t)
+			cfg := testConfig(t)
+			cfg.DegradeOnQueueFull = true
+			m := testManager(t, cfg)
+			c := testComponent(t, m, "rpc")
+			c.Healthy()
+			before := currentRecord(t, m, "rpc")
+			if test.closed {
+				if err := m.Close(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c.Info("拒收", test.fields)
+			if rejected, failed := c.logs.Counts(); rejected != 1 || failed != 0 {
+				t.Fatalf("阶段计数不符: rejected=%d failed=%d", rejected, failed)
+			}
+			if currentRecord(t, m, "rpc") != before {
+				t.Fatal("提交失败改变了业务健康状态")
+			}
+			if !c.lastQueueFull.IsZero() {
+				t.Fatal("非队满拒收触发了自动降级窗口")
+			}
+			text := capture.String()
+			for _, want := range []string{
+				`project="demo"`,
+				`instance_id="instance-a"`,
+				`component="rpc"`,
+				test.wantReason,
+			} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("标准日志缺少诊断信息 %q: %s", want, text)
+				}
+			}
+		})
+	}
+}
+
+func TestLogInvalidComponents(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		component *Component
+	}{
+		{
+			name: "nil",
+		},
+		{
+			name:      "zero",
+			component: &Component{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture := captureLogs(t)
+			test.component.Healthy()
+			test.component.Degraded()
+			test.component.Unhealthy()
+			test.component.Info("空句柄", nil)
+			if capture.String() == "" {
+				t.Fatal("无效句柄未通过标准日志诊断")
+			}
+		})
+	}
+}
+
+func TestConcurrentRejectedLogs(t *testing.T) {
+	capture := captureLogs(t)
+	m := testManager(t, testConfig(t))
+	c := testComponent(t, m, "rpc")
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var workers sync.WaitGroup
+	for n := 0; n < 8; n++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := 0; i < 100; i++ {
+				c.Info("关闭后的并发提交", nil)
+			}
+		}()
+	}
+	workers.Wait()
+	if rejected, failed := c.logs.Counts(); rejected != 800 || failed != 0 {
+		t.Fatalf("并发拒收计数不符: rejected=%d failed=%d", rejected, failed)
+	}
+	if !strings.Contains(capture.String(), `component="rpc"`) {
+		t.Fatal("并发拒收未通过标准日志诊断")
 	}
 }

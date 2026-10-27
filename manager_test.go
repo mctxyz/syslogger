@@ -82,9 +82,8 @@ func TestStateSwitchAndClose(t *testing.T) {
 	}
 	var nilComponent *Component
 	nilComponent.Healthy()
-	if nilComponent.Info("空句柄", nil) == nil {
-		t.Fatal("空句柄日志未返回错误")
-	}
+	nilComponent.Degraded()
+	nilComponent.Unhealthy()
 }
 
 func TestRegistrationPanicIsolation(t *testing.T) {
