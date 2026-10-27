@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
+	"github.com/mctxyz/syslogger/internal/identity"
 	"github.com/mctxyz/syslogger/internal/logging"
 	"github.com/mctxyz/syslogger/internal/record"
 )
@@ -25,7 +26,18 @@ type Component struct {
 
 func (c *Component) log(level logging.Level, message string, fields map[string]any) {
 	if c == nil || c.manager == nil {
-		log.Printf("syslogger: 无效组件句柄，日志已拒收")
+		name := ""
+		if c != nil {
+			name = c.name
+		}
+		entry, err := logging.Encode(identity.Instance{}, name, level, message, fields, time.Now())
+		warning := "syslogger: 无效组件句柄，日志已拒收"
+		if err != nil {
+			log.Printf("%s\n%v", warning, err)
+			return
+		}
+		// 缺少管理器时使用空实例身份，警告和事件通过同一次标准日志输出保持相邻。
+		log.Printf("%s\n%s", warning, entry.Body)
 		return
 	}
 	m := c.manager

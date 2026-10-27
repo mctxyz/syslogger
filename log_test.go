@@ -246,8 +246,9 @@ func TestLogRejectionDiagnostics(t *testing.T) {
 
 func TestLogInvalidComponents(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		component *Component
+		name          string
+		component     *Component
+		wantComponent string
 	}{
 		{
 			name: "nil",
@@ -256,17 +257,98 @@ func TestLogInvalidComponents(t *testing.T) {
 			name:      "zero",
 			component: &Component{},
 		},
+		{
+			name:          "missing_manager",
+			component:     &Component{name: "rpc"},
+			wantComponent: "rpc",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			capture := captureLogs(t)
 			test.component.Healthy()
 			test.component.Degraded()
 			test.component.Unhealthy()
-			test.component.Info("空句柄", nil)
-			if capture.String() == "" {
-				t.Fatal("无效句柄未通过标准日志诊断")
+			message := "空句柄\n详细信息"
+			test.component.Error(message, map[string]any{
+				"error": errors.New("业务错误"),
+			})
+			lines := strings.Split(strings.TrimSuffix(capture.String(), "\n"), "\n")
+			if len(lines) != 2 || !strings.HasSuffix(lines[0], "syslogger: 无效组件句柄，日志已拒收") {
+				t.Fatalf("无效句柄未输出警告及独立 JSON 行: %q", lines)
+			}
+			var event struct {
+				Timestamp  time.Time      `json:"timestamp"`
+				Level      string         `json:"level"`
+				Project    string         `json:"project"`
+				InstanceID string         `json:"instance_id"`
+				Component  string         `json:"component"`
+				Message    string         `json:"message"`
+				Fields     map[string]any `json:"fields"`
+			}
+			if err := json.Unmarshal([]byte(lines[1]), &event); err != nil {
+				t.Fatalf("标准日志中的事件 JSON 无效: %v", err)
+			}
+			if event.Project != "" || event.InstanceID != "" || event.Component != test.wantComponent {
+				t.Fatalf("无管理器事件的身份不符: %+v", event)
+			}
+			if event.Level != "error" || event.Message != message || event.Timestamp.IsZero() {
+				t.Fatalf("原始日志等级、消息或时间未保留: %+v", event)
+			}
+			if event.Fields["error"] != "业务错误" {
+				t.Fatalf("原始日志字段未保留: %+v", event.Fields)
 			}
 		})
+	}
+}
+
+func TestInvalidComponentEncodingFailure(t *testing.T) {
+	capture := captureLogs(t)
+	var component *Component
+	component.Info("不能编码", map[string]any{
+		"value": make(chan int),
+	})
+	lines := strings.Split(strings.TrimSuffix(capture.String(), "\n"), "\n")
+	if len(lines) != 2 || !strings.HasSuffix(lines[0], "syslogger: 无效组件句柄，日志已拒收") {
+		t.Fatalf("编码失败时未保留句柄警告: %q", lines)
+	}
+	if !strings.Contains(lines[1], "chan int") {
+		t.Fatalf("编码失败原因未通过标准日志输出: %s", lines[1])
+	}
+}
+
+func TestConcurrentInvalidComponentLogs(t *testing.T) {
+	capture := captureLogs(t)
+	var component *Component
+	var workers sync.WaitGroup
+	for n := 0; n < 8; n++ {
+		workers.Add(1)
+		go func(n int) {
+			defer workers.Done()
+			for i := 0; i < 20; i++ {
+				component.Info(fmt.Sprintf("%d-%d", n, i), nil)
+			}
+		}(n)
+	}
+	workers.Wait()
+	lines := strings.Split(strings.TrimSuffix(capture.String(), "\n"), "\n")
+	if len(lines) != 8*20*2 {
+		t.Fatalf("并发回退日志的行数不符: %d", len(lines))
+	}
+	seen := make(map[string]bool)
+	for i := 0; i < len(lines); i += 2 {
+		if !strings.HasSuffix(lines[i], "syslogger: 无效组件句柄，日志已拒收") {
+			t.Fatalf("并发警告与事件发生交错: %s", lines[i])
+		}
+		var event struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(lines[i+1]), &event); err != nil {
+			t.Fatalf("并发事件 JSON 无效: %v", err)
+		}
+		if event.Message == "" || seen[event.Message] {
+			t.Fatalf("并发事件缺失消息或发生重复: %+v", event)
+		}
+		seen[event.Message] = true
 	}
 }
 
