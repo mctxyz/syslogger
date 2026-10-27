@@ -294,6 +294,27 @@ func TestSafeQueueHealthConfig(t *testing.T) {
 	}
 }
 
+func TestSafeDefaultQueueCapacity(t *testing.T) {
+	for _, capacity := range []int{-1, 0, 1, 512, 4096, 4097} {
+		cfg, corrections := (Config{
+			Project:              "demo",
+			DefaultQueueCapacity: capacity,
+		}).corrected()
+		want := capacity
+		fields := make(map[string]logging.Level)
+		if capacity == 0 {
+			want = 512
+		} else if capacity < 1 || capacity > 4096 {
+			want = 512
+			fields["DefaultQueueCapacity"] = logging.Warning
+		}
+		if cfg.DefaultQueueCapacity != want {
+			t.Fatalf("容错构造的默认容量不符: input=%d got=%d want=%d", capacity, cfg.DefaultQueueCapacity, want)
+		}
+		assertCorrections(t, cfg, corrections, fields)
+	}
+}
+
 // assertSafeConfigProperties 核对严格校验、合法配置一致性和重复纠正的幂等性。
 func assertSafeConfigProperties(t *testing.T, input Config) {
 	t.Helper()
@@ -383,6 +404,20 @@ func FuzzQueueHealthConfig(f *testing.F) {
 			StateEnabled:              stateEnabled,
 			DegradeOnQueueFull:        enabled,
 			QueueFullRecoveryInterval: time.Duration(interval),
+		})
+	})
+}
+
+func FuzzDefaultQueueCapacity(f *testing.F) {
+	f.Add(0)
+	f.Add(1)
+	f.Add(4096)
+	f.Add(-1)
+	f.Add(4097)
+	f.Fuzz(func(t *testing.T, capacity int) {
+		assertSafeConfigProperties(t, Config{
+			Project:              "demo",
+			DefaultQueueCapacity: capacity,
 		})
 	})
 }

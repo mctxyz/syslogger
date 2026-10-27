@@ -28,6 +28,15 @@ func (cfg Config) corrected() (Config, []configCorrection) {
 		})
 	}
 	cfg = cfg.withDefaults()
+	if cfg.DefaultQueueCapacity < 1 || cfg.DefaultQueueCapacity > maximumQueueCapacity {
+		cfg.DefaultQueueCapacity = defaultQueueCapacity
+		corrections = append(corrections, configCorrection{
+			field:     "DefaultQueueCapacity",
+			reason:    fmt.Sprintf("模块默认队列容量必须为 1～%d", maximumQueueCapacity),
+			effective: cfg.DefaultQueueCapacity,
+			level:     logging.Warning,
+		})
+	}
 	if cfg.MaxLabelValueBytes < minimumMaxLabelValueBytes {
 		cfg.MaxLabelValueBytes = defaultMaxLabelValueBytes
 		corrections = append(corrections, configCorrection{

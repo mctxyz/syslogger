@@ -14,6 +14,10 @@ const (
 	minimumMaxLabelValueBytes = 21
 	// 队满后的默认观察期以连续无丢弃时间判断恢复。
 	defaultQueueFullRecoveryInterval = 30 * time.Second
+	// defaultQueueCapacity 是未配置时使用的模块日志队列容量。
+	defaultQueueCapacity = 512
+	// maximumQueueCapacity 限定单模块指针队列的容量范围。
+	maximumQueueCapacity = 4096
 )
 
 // Config 固定一个项目运行实例的身份、状态维护及指标出口配置。
@@ -24,6 +28,8 @@ type Config struct {
 	InstanceID string
 	// SyslogSocketPath 指定本机 Unix socket；空值按系统标准路径发现。
 	SyslogSocketPath string
+	// DefaultQueueCapacity 指定模块日志队列的默认容量，零值为 512，合法范围为 1～4096。
+	DefaultQueueCapacity int
 	// StateEnabled 开启同步状态维护，零值关闭。
 	StateEnabled bool
 	// DegradeOnQueueFull 按模块队满丢弃自动降级，零值关闭，启用时需要 StateEnabled。
@@ -65,6 +71,9 @@ func (cfg Config) normalized() (Config, error) {
 	if err := validateInstanceID(cfg.InstanceID, cfg.MaxLabelValueBytes); err != nil {
 		return Config{}, err
 	}
+	if cfg.DefaultQueueCapacity < 1 || cfg.DefaultQueueCapacity > maximumQueueCapacity {
+		return Config{}, fmt.Errorf("syslogger: DefaultQueueCapacity 必须为 1～%d", maximumQueueCapacity)
+	}
 	if !cfg.StateEnabled && (cfg.HTTP.Enabled || cfg.File.Enabled) {
 		return Config{}, fmt.Errorf("syslogger: HTTP 或文件出口启用时必须开启 StateEnabled")
 	}
@@ -93,6 +102,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.MaxLabelValueBytes == 0 {
 		cfg.MaxLabelValueBytes = defaultMaxLabelValueBytes
+	}
+	if cfg.DefaultQueueCapacity == 0 {
+		cfg.DefaultQueueCapacity = defaultQueueCapacity
 	}
 	if cfg.File.Enabled && cfg.File.FlushInterval == 0 {
 		cfg.File.FlushInterval = defaultFlushInterval

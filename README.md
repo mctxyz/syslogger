@@ -57,6 +57,8 @@ manager := syslogger.SafeNew(syslogger.Config{
 | `InstanceID` 非空但不合法 | 使用 `common`，记录 Warning |
 | `MaxLabelValueBytes` 为零 | 正常使用默认值 2048 |
 | `MaxLabelValueBytes` 非零且小于 21 | 回退 2048，记录 Warning |
+| `DefaultQueueCapacity` 为零 | 正常使用默认值 512 |
+| `DefaultQueueCapacity` 为负或大于 4096 | 回退 512，记录 Warning |
 | 指标文件已启用，但 `OutputPath` 为空或全空白 | 停用指标文件出口，记录 Error；HTTP 和 syslog 配置保持原样 |
 | 指标文件已启用，刷新间隔为负 | 回退 10 秒，记录 Warning |
 | 指标文件已启用，刷新间隔为零 | 正常使用默认值 10 秒 |
@@ -87,7 +89,23 @@ rpc.Healthy()
 
 正文实际为单行 JSON，时间为 UTC RFC3339Nano，等级为小写名称。顶层 error 字段使用 Error() 文本，nil 或空字段省略 fields。编码在调用线程完成，调用期间字段由业务保证无并发修改；返回后修改原字段不会改变已编码日志。协议头使用 LOG_USER facility 和真实 severity，syslog tag 来自项目名；协议头中的空白和控制字符规范化为下划线，JSON 身份保留原文。
 
-每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Register(name, capacity)` 两参数必传，1～4096 使用原值，其余回退 512。队满立即拒收新日志，更新拒收 Counter 并通过标准日志诊断，已接收记录保持 FIFO。发送成功只表示本机 socket 写入成功，中心接收和持久化由设备日志链路管理。
+每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Config.DefaultQueueCapacity` 为管理器设置模块默认容量，零值为 512，合法范围为 1～4096，`New` 和 `SafeNew` 均可配置。`New` 拒绝非法默认容量，`SafeNew` 回退 512 并记录配置纠正。
+
+`Register(name, capacity)` 两参数必传，1～4096 使用原值，其余使用该管理器的默认容量。因此 `Register("rpc", 0)` 使用配置的默认值，`Register("worker", 256)` 为该模块指定 256 条队列：
+
+```go
+manager := syslogger.SafeNew(syslogger.Config{
+    Project: "demo",
+    DefaultQueueCapacity: 1024,
+})
+rpc, err := manager.Register("rpc", 0)
+if err != nil {
+    return err
+}
+rpc.Info("组件已注册", nil)
+```
+
+队满立即拒收新日志，更新拒收 Counter 并通过标准日志诊断，已接收记录保持 FIFO。发送成功只表示本机 socket 写入成功，中心接收和持久化由设备日志链路管理。
 
 编码失败、队满或管理器关闭后的日志调用通过标准库 `log.Printf` 输出独立诊断，并累计模块拒收次数；提交诊断按模块每秒最多输出一次，Counter 保留全部次数。后台连接或写入失败沿用独立标准日志诊断和发送失败 Counter，失败条目即放弃。连接恢复服务后续日志，不重放失败记录。本机连接及写入等待各受有限超时约束，业务前台仍承担编码和必要的标准日志输出成本，库不承诺硬实时调用上限。
 

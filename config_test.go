@@ -11,6 +11,9 @@ func TestConfigDefaultsAndIdentity(t *testing.T) {
 	if m.cfg.InstanceID != "common" || m.cfg.Project != " 项目 A " || m.cfg.MaxLabelValueBytes != 2048 || m.cfg.StateEnabled || m.cfg.HTTP.Enabled || m.cfg.File.Enabled {
 		t.Fatalf("默认配置不符: %+v", m.cfg)
 	}
+	if m.cfg.DefaultQueueCapacity != 512 {
+		t.Fatalf("默认日志队列容量不符: %d", m.cfg.DefaultQueueCapacity)
+	}
 	for _, id := range []string{"abc", strings.Repeat("a", 128), " \t ", "../中文/ID"} {
 		cfg := testConfig(t)
 		cfg.InstanceID = id

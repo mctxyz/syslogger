@@ -26,11 +26,11 @@ func TestQueueFullPreservesFIFO(t *testing.T) {
 	}
 }
 
-func TestCapacityNormalization(t *testing.T) {
-	for _, test := range []struct{ input, want int }{{-1, 512}, {0, 512}, {1, 1}, {4095, 4095}, {4096, 4096}, {4097, 512}} {
-		q := New(test.input, "", "demo", "common", "rpc")
-		if cap(q.entries) != test.want {
-			t.Fatalf("容量 %d 实际为 %d", test.input, cap(q.entries))
+func TestQueueCapacity(t *testing.T) {
+	for _, capacity := range []int{1, 64, 512, 4095, 4096} {
+		q := New(capacity, "", "demo", "common", "rpc")
+		if cap(q.entries) != capacity {
+			t.Fatalf("容量 %d 实际为 %d", capacity, cap(q.entries))
 		}
 		q.Stop(context.Background())
 		if err := q.Wait(); err != nil {

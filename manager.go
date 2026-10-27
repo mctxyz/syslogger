@@ -69,7 +69,7 @@ func newManager(cfg Config) *Manager {
 	return m
 }
 
-// Register 建立独立模块；容量 1～4096 使用原值，其余值回退 512。
+// Register 建立独立模块；容量 1～4096 使用原值，其余值采用 Config.DefaultQueueCapacity。
 // 模块集合在交出 Handler 或开始启动指标出口时固定。
 func (m *Manager) Register(name string, queueCapacity int) (component *Component, err error) {
 	m.mu.Lock()
@@ -106,6 +106,9 @@ func (m *Manager) Register(name string, queueCapacity int) (component *Component
 			m.diagnostic.RegistrationFailed(kind, time.Now())
 		}
 		return nil, err
+	}
+	if queueCapacity < 1 || queueCapacity > maximumQueueCapacity {
+		queueCapacity = m.cfg.DefaultQueueCapacity
 	}
 	component = &Component{manager: m, name: name}
 	m.components[name] = component

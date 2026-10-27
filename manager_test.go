@@ -3,6 +3,8 @@ package syslogger
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
@@ -42,6 +44,62 @@ func TestRegistrationCapacityAndPreservation(t *testing.T) {
 	testComponent(t, m, "新组件")
 	if currentRecord(t, m, diagnostic.ComponentName).State != int(StateHealthy) {
 		t.Fatal("注册成功未恢复管理器")
+	}
+}
+
+func TestConfiguredDefaultQueueCapacity(t *testing.T) {
+	for _, safe := range []bool{false, true} {
+		for _, configured := range []int{-1, 0, 1, 1024, 4096, 4097} {
+			t.Run(fmt.Sprintf("safe_%v/default_%d", safe, configured), func(t *testing.T) {
+				capture := captureLogs(t)
+				cfg := testConfig(t)
+				cfg.DefaultQueueCapacity = configured
+				invalid := configured < 0 || configured > 4096
+				if invalid && !safe {
+					if manager, err := New(cfg); manager != nil || err == nil {
+						t.Fatalf("严格构造未拒绝非法默认容量: %d", configured)
+					}
+					return
+				}
+				var manager *Manager
+				if safe {
+					manager = testSafeManager(t, cfg)
+				} else {
+					manager = testManager(t, cfg)
+				}
+				wantDefault := configured
+				if configured == 0 || invalid {
+					wantDefault = 512
+				}
+				if manager.cfg.DefaultQueueCapacity != wantDefault || cfg.DefaultQueueCapacity != configured {
+					t.Fatal("默认容量归一化不符或修改了调用方配置")
+				}
+				for _, requested := range []int{-1, 0, 1, 4095, 4096, 4097} {
+					component, err := manager.Register(fmt.Sprint(requested), requested)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := requested
+					if requested < 1 || requested > 4096 {
+						want = wantDefault
+					}
+					// 直接核对实际 channel 容量，生产接口保持现有职责。
+					queue := reflect.ValueOf(component.logs).Elem()
+					entries := queue.FieldByName("entries")
+					if got := entries.Cap(); got != want {
+						t.Fatalf("模块容量不符: requested=%d got=%d want=%d", requested, got, want)
+					}
+				}
+				if invalid {
+					if currentRecord(t, manager, diagnostic.ComponentName).State != int(StateUnhealthy) {
+						t.Fatal("非法默认容量的初始化异常被组件注册覆盖")
+					}
+					if !strings.Contains(capture.String(), `field="DefaultQueueCapacity"`) {
+						t.Fatal("非法默认容量未通过标准日志诊断")
+					}
+				}
+			})
+		}
 	}
 }
 

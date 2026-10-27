@@ -36,11 +36,8 @@ type Queue struct {
 	abortErr      error
 }
 
-// New 建立模块有界指针队列，连接在后台处理首条事件时创建。
+// New 按调用方已确定的正数容量建立模块有界指针队列，连接在后台处理首条事件时创建。
 func New(capacity int, path, project, instance, component string) *Queue {
-	if capacity <= 0 || capacity > 4096 {
-		capacity = 512
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &Queue{entries: make(chan *Entry, capacity), done: make(chan struct{}), ctx: ctx, cancel: cancel,
 		transport: transport{path: path, tag: project}, identity: fmt.Sprintf("project=%q instance_id=%q component=%q", project, instance, component)}
