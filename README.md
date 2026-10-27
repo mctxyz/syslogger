@@ -74,10 +74,10 @@ manager := syslogger.SafeNew(syslogger.Config{
 
 ## 日志
 
-八级方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields map[string]any)`，无返回值，字段可传 nil；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
+八级方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields Fields)`，无返回值，字段可传 nil。`Fields` 是以 `map[string]any` 为底层类型的结构化业务字段类型，调用方使用 `syslogger.Fields` 构造字段；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
 
 ```go
-rpc.Info("RPC 已连接", map[string]any{
+rpc.Info("RPC 已连接", syslogger.Fields{
     "endpoint": "primary",
 })
 rpc.Healthy()

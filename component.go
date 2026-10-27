@@ -24,7 +24,7 @@ type Component struct {
 	lastQueueFull time.Time
 }
 
-func (c *Component) log(level logging.Level, message string, fields map[string]any) {
+func (c *Component) log(level logging.Level, message string, fields Fields) {
 	if c == nil || c.manager == nil {
 		name := ""
 		if c != nil {

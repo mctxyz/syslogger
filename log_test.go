@@ -21,7 +21,7 @@ func TestEightLevelsAndFieldSnapshot(t *testing.T) {
 	cfg.StateEnabled = false
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
-	methods := []func(string, map[string]any){
+	methods := []func(string, Fields){
 		c.Emergency,
 		c.Alert,
 		c.Critical,
@@ -33,10 +33,15 @@ func TestEightLevelsAndFieldSnapshot(t *testing.T) {
 	}
 	names := []string{"emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"}
 	for level, method := range methods {
-		fields := map[string]any{"error": errors.New("原始错误"), "nested": map[string]any{"value": "原值"}}
+		fields := Fields{
+			"error": errors.New("原始错误"),
+			"nested": Fields{
+				"value": "原值",
+			},
+		}
 		method("消息\n第二行", fields)
 		fields["error"] = "已改变"
-		fields["nested"].(map[string]any)["value"] = "已改变"
+		fields["nested"].(Fields)["value"] = "已改变"
 		data := receive(t, receiver)
 		if !strings.HasPrefix(string(data), fmt.Sprintf("<%d>", 8+level)) || strings.Contains(string(data), "\n") {
 			t.Fatalf("等级或单行格式不符: %s", data)
@@ -58,7 +63,7 @@ func TestEightLevelsAndFieldSnapshot(t *testing.T) {
 	if c.current.Reported {
 		t.Fatal("日志自动更新了业务状态")
 	}
-	c.Info("不能编码", map[string]any{"value": make(chan int)})
+	c.Info("不能编码", Fields{"value": make(chan int)})
 	rejected, failed := c.logs.Counts()
 	if rejected != 1 || failed != 0 {
 		t.Fatalf("阶段计数不符: %d %d", rejected, failed)
@@ -108,7 +113,7 @@ func TestRepresentativeModuleRates(t *testing.T) {
 			m := testManager(t, cfg)
 			c := testComponent(t, m, "rpc")
 			for n := 0; n < test.count; n++ {
-				c.Info(strings.Repeat("x", 512), map[string]any{"sequence": n})
+				c.Info(strings.Repeat("x", 512), Fields{"sequence": n})
 				data := receive(t, receiver)
 				if !strings.Contains(string(data), fmt.Sprintf(`"sequence":%d`, n)) {
 					t.Fatal("FIFO 顺序不符")
@@ -189,13 +194,13 @@ func TestModuleBackpressureIsolationAndBoundedClose(t *testing.T) {
 func TestLogRejectionDiagnostics(t *testing.T) {
 	for _, test := range []struct {
 		name       string
-		fields     map[string]any
+		fields     Fields
 		closed     bool
 		wantReason string
 	}{
 		{
 			name: "encoding",
-			fields: map[string]any{
+			fields: Fields{
 				"value": make(chan int),
 			},
 			wantReason: "chan int",
@@ -269,7 +274,7 @@ func TestLogInvalidComponents(t *testing.T) {
 			test.component.Degraded()
 			test.component.Unhealthy()
 			message := "空句柄\n详细信息"
-			test.component.Error(message, map[string]any{
+			test.component.Error(message, Fields{
 				"error": errors.New("业务错误"),
 			})
 			lines := strings.Split(strings.TrimSuffix(capture.String(), "\n"), "\n")
@@ -304,7 +309,7 @@ func TestLogInvalidComponents(t *testing.T) {
 func TestInvalidComponentEncodingFailure(t *testing.T) {
 	capture := captureLogs(t)
 	var component *Component
-	component.Info("不能编码", map[string]any{
+	component.Info("不能编码", Fields{
 		"value": make(chan int),
 	})
 	lines := strings.Split(strings.TrimSuffix(capture.String(), "\n"), "\n")
