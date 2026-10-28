@@ -104,7 +104,10 @@ func TestConcurrentQueueHealthAndClose(t *testing.T) {
 				c.Info("并发提交", nil)
 				c.Unhealthy()
 				c.Healthy()
-				_ = m.snapshot()
+				if _, err := m.Registry().Gather(); err != nil {
+					t.Errorf("并发采集失败: %v", err)
+					return
+				}
 			}
 		}()
 	}

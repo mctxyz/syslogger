@@ -52,8 +52,8 @@ func TestSafeConfigProject(t *testing.T) {
 			want:  "unknown",
 		},
 		{
-			value: strings.Repeat("p", 22),
-			want:  "unknown",
+			value: strings.Repeat("p", 4096),
+			want:  strings.Repeat("p", 4096),
 		},
 		{
 			value: " 项目 A ",
@@ -62,8 +62,7 @@ func TestSafeConfigProject(t *testing.T) {
 	} {
 		t.Run(test.value, func(t *testing.T) {
 			cfg, corrections := (Config{
-				Project:            test.value,
-				MaxLabelValueBytes: 21,
+				Project: test.value,
 			}).corrected()
 			if cfg.Project != test.want || cfg.InstanceID != "common" {
 				t.Fatalf("项目身份回退不符：%+v", cfg)
@@ -80,7 +79,6 @@ func TestSafeConfigProject(t *testing.T) {
 func TestSafeConfigInstance(t *testing.T) {
 	for _, test := range []struct {
 		value string
-		limit int
 		want  string
 	}{
 		{
@@ -101,8 +99,7 @@ func TestSafeConfigInstance(t *testing.T) {
 		},
 		{
 			value: strings.Repeat("i", 22),
-			limit: 21,
-			want:  "common",
+			want:  strings.Repeat("i", 22),
 		},
 		{
 			value: strings.Repeat("i", 128),
@@ -119,9 +116,8 @@ func TestSafeConfigInstance(t *testing.T) {
 	} {
 		t.Run(test.value, func(t *testing.T) {
 			cfg, corrections := (Config{
-				Project:            "demo",
-				InstanceID:         test.value,
-				MaxLabelValueBytes: test.limit,
+				Project:    "demo",
+				InstanceID: test.value,
 			}).corrected()
 			if cfg.InstanceID != test.want {
 				t.Fatalf("实例身份回退不符：%q", cfg.InstanceID)
@@ -136,20 +132,6 @@ func TestSafeConfigInstance(t *testing.T) {
 }
 
 func TestSafeConfigNumericValues(t *testing.T) {
-	for _, limit := range []int{-1, 0, 1, 20, 21, 2048} {
-		cfg, corrections := (Config{
-			Project:            "demo",
-			MaxLabelValueBytes: limit,
-		}).corrected()
-		want := make(map[string]logging.Level)
-		if limit != 0 && limit < 21 {
-			want["MaxLabelValueBytes"] = logging.Warning
-		}
-		if limit < 21 && cfg.MaxLabelValueBytes != 2048 {
-			t.Fatalf("标签上限未回退默认值：%d", cfg.MaxLabelValueBytes)
-		}
-		assertCorrections(t, cfg, corrections, want)
-	}
 	for _, interval := range []time.Duration{-time.Second, 0, time.Second} {
 		cfg, corrections := (Config{
 			Project:      "demo",
@@ -369,7 +351,7 @@ func FuzzSafeConfig(f *testing.F) {
 		t *testing.T,
 		project string,
 		instance string,
-		limit int,
+		capacity int,
 		interval int64,
 		httpEnabled bool,
 		fileEnabled bool,
@@ -377,10 +359,10 @@ func FuzzSafeConfig(f *testing.F) {
 		path string,
 	) {
 		input := Config{
-			Project:            project,
-			InstanceID:         instance,
-			MaxLabelValueBytes: limit,
-			StateEnabled:       stateEnabled,
+			Project:              project,
+			InstanceID:           instance,
+			DefaultQueueCapacity: capacity,
+			StateEnabled:         stateEnabled,
 			HTTP: HTTPConfig{
 				Enabled: httpEnabled,
 			},

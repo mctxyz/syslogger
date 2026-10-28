@@ -8,7 +8,7 @@ import (
 
 func TestConfigDefaultsAndIdentity(t *testing.T) {
 	m := testManager(t, Config{Project: " 项目 A "})
-	if m.cfg.InstanceID != "common" || m.cfg.Project != " 项目 A " || m.cfg.MaxLabelValueBytes != 2048 || m.cfg.StateEnabled || m.cfg.HTTP.Enabled || m.cfg.File.Enabled {
+	if m.cfg.InstanceID != "common" || m.cfg.Project != " 项目 A " || m.cfg.StateEnabled || m.cfg.HTTP.Enabled || m.cfg.File.Enabled {
 		t.Fatalf("默认配置不符: %+v", m.cfg)
 	}
 	if m.cfg.DefaultQueueCapacity != 512 {
@@ -28,7 +28,6 @@ func TestConfigValidationAndOutletCombinations(t *testing.T) {
 	for _, change := range []func(*Config){
 		func(c *Config) { c.Project = "" }, func(c *Config) { c.Project = "\u3000\t" }, func(c *Config) { c.Project = "\xff" },
 		func(c *Config) { c.InstanceID = "ab" }, func(c *Config) { c.InstanceID = strings.Repeat("a", 129) }, func(c *Config) { c.InstanceID = "a\xffb" },
-		func(c *Config) { c.MaxLabelValueBytes = 20 }, func(c *Config) { c.MaxLabelValueBytes = -1 },
 		func(c *Config) { c.StateEnabled = false; c.HTTP.Enabled = true },
 		func(c *Config) { c.StateEnabled = false; c.File.Enabled = true },
 		func(c *Config) { c.File.Enabled = true; c.File.OutputPath = " " },

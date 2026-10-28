@@ -1,6 +1,6 @@
 # syslogger
 
-Go 1.19 标准库实现的本机 syslog 日志与组件健康状态库。module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`。
+Go 1.19 本机 syslog 日志与组件健康状态库，指标注册和导出使用 Prometheus 官方客户端。module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`。
 
 ```text
 日志 → 模块独立 FIFO → 本机 syslog → 设备保存、轮转、转发
@@ -13,7 +13,7 @@ Go 1.19 标准库实现的本机 syslog 日志与组件健康状态库。module 
 import "github.com/mctxyz/syslogger"
 ```
 
-日志和指标共用 `project、instance_id、component`。业务代码固定项目名和组件名，业务入口从配置文件等来源读取实例 ID 后传给库；空实例 ID 使用 `common`，显式非空值按 3～128 字节、UTF-8 和标签上限校验并保留原文。
+日志和内置指标共用 `project、instance_id、component`。业务代码固定项目名和组件名，二者保留非空白且合法 UTF-8 的原文；业务入口从配置文件等来源读取实例 ID 后传给库，空实例 ID 使用 `common`，显式非空值按 3～128 字节和 UTF-8 校验并保留原文。
 
 下方为初始化片段，业务在 New 成功后接管管理器的关闭职责，后续初始化失败也按自己的流程调用 Close 收尾。
 
@@ -31,7 +31,7 @@ if err := manager.StartHTTP(); err != nil { return err }
 rpc.Unhealthy()
 ```
 
-已有服务器通过 `Handler()` 挂载，服务器归业务管理。模块在取得 Handler 或开始启动指标出口之前完成注册；配置及采集集合之后固定。模块注册后日志即可使用，业务退出时调用 `Close(ctx)`。
+已有服务器通过 `Handler()` 挂载，服务器归业务管理。模块在取得 Handler、开始启动指标出口或首次通过 Registry 采集之前完成注册；配置及组件集合之后固定。模块注册后日志即可使用，业务退出时调用 `Close(ctx)`。
 
 同一项目的并行实例应显式提供不同 ID，跨重启复用。多个实例使用 common 会共享逻辑身份；各实例的指标文件路径由接入方分别配置。
 
@@ -55,8 +55,7 @@ manager := syslogger.SafeNew(syslogger.Config{
 | `Project` 非空但不合法 | 使用 `unknown`，记录 Warning |
 | `InstanceID` 为空字符串 | 正常使用默认值 `common` |
 | `InstanceID` 非空但不合法 | 使用 `common`，记录 Warning |
-| `MaxLabelValueBytes` 为零 | 正常使用默认值 2048 |
-| `MaxLabelValueBytes` 非零且小于 21 | 回退 2048，记录 Warning |
+| `Registry` 注册内置 Collector 失败 | 使用独立 Registry，记录 Error；调用方原注册表保持原样 |
 | `DefaultQueueCapacity` 为零 | 正常使用默认值 512 |
 | `DefaultQueueCapacity` 为负或大于 4096 | 回退 512，记录 Warning |
 | 指标文件已启用，但 `OutputPath` 为空或全空白 | 停用指标文件出口，记录 Error；HTTP 和 syslog 配置保持原样 |
@@ -158,9 +157,57 @@ manager := syslogger.SafeNew(syslogger.Config{
 | `syslogger_component_log_rejected_total` | Counter | 模块入队前拒收的调用累计次数 |
 | `syslogger_component_log_send_failures_total` | Counter | 模块后台发送失败的条目累计数 |
 
-全部样本只带三个身份标签。业务组件输出四条样本，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
+内置样本带上述三个身份标签。业务组件输出四条样本，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
+
+### 共享业务指标
+
+`Manager` 实现官方 `prometheus.Collector`，直接读取现有健康记录和日志计数。`Config.Registry` 接收官方 `*prometheus.Registry`；省略时创建管理器独立的注册表，`manager.Registry()` 返回实际使用的注册表。默认表仅包含 syslogger 的 Collector，Go 和进程指标可由业务按需注册。
+
+业务可在同一注册表中注册官方 GaugeVec、Counter、Histogram 等 Collector，指标保留自己的名称、标签及更新生命周期：
+
+```go
+registry := prometheus.NewRegistry()
+manager, err := syslogger.New(syslogger.Config{
+    Project: "contract-listener",
+    StateEnabled: true,
+    Registry: registry,
+    HTTP: syslogger.HTTPConfig{Enabled: true},
+})
+if err != nil {
+    return err
+}
+defer manager.Close(context.Background())
+rpc, err := manager.Register("rpc", 512)
+if err != nil {
+    return err
+}
+rpc.Healthy()
+
+height := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+    Name: "alertdog_node_height",
+    Help: "节点高度",
+}, []string{"chain", "source"})
+manager.Registry().MustRegister(height)
+height.WithLabelValues("eth", "primary").Set(123)
+
+handler, err := manager.Handler()
+if err != nil {
+    return err
+}
+mux.Handle("/metrics", handler)
+```
+
+该片段使用 `context`、`github.com/prometheus/client_golang/prometheus` 和已有的 `*http.ServeMux`。业务继续负责 RPC 探测及指标更新；syslogger 的 HTTP 与 `.prom` 文件出口通过同一个 Registry 采集并使用官方文本编码。两次采集之间数值可能变化，导出的指标集合及标签规则一致。
+
+已有 `promhttp.HandlerFor(registry, promhttp.HandlerOpts{})` 可直接导出共享表，syslogger 只需开启 `StateEnabled` 维护健康记录。已有 `promhttp.Handler()` 使用 `prometheus.DefaultGatherer`，可将对应的同一个 `*prometheus.Registry` 传入 `Config.Registry`。`prometheus.DefaultRegisterer` 的类型是 `prometheus.Registerer` 接口，使用前需确认具体注册表及其与 Gatherer 的对应关系；显式创建并共享 Registry 更便于隔离和管理生命周期。
+
+首次采集固定 syslogger 的组件集合，业务 Collector 仍可按官方规则动态注册、注销和更新。自定义 Collector 应支持并发采集，并在采集中读取及时可用的内存数据；HTTP 和文件交付会等待 Collector 完成。内置指标的项目和实例为常量标签，不同身份的管理器可以共用 Registry。同一身份或不兼容的指标描述符冲突由 `New` 返回官方注册错误；`SafeNew` 回退独立表后，接入方通过 `manager.Registry()` 取得实际表。
+
+### HTTP 与文件交付
 
 HTTP 与文件出口默认关闭，启用时须同时开启 StateEnabled。`StartHTTP()` 同步绑定后后台提供 `/metrics`。`StartFile()` 首次同步写入完整快照，成功后周期刷新，周期默认 10 秒。两个出口各自启动，失败可显式再次尝试，重复启动返回错误。
+
+采集或编码失败时通过标准日志诊断，HTTP 返回 500，文件保留上一次完整快照；首次文件采集失败由 `StartFile` 返回错误，最终采集失败由 `Close` 返回错误。
 
 文件出口通过 `Config.File.OutputPath` 指定完整路径及文件名，父目录由接入方准备；相对路径基于当前工作目录。例如：
 
@@ -181,7 +228,7 @@ fileConfig := syslogger.FileConfig{
 
 ## 关闭与验证
 
-首次 `Close(ctx)` 建立接收截止，并以该上下文限制日志排空；到期取消连接、释放积压记录并反馈未完成交付。只关闭库拥有的 HTTP 服务器，外部服务持有的 Handler 随后返回 503。已成功启动的文件出口串行写入最终快照并保留文件，未启动的出口保持原状态。重复 Close 复用收尾结果，后续 ctx 只限制本次等待。文件系统和独立错误输出的底层 I/O 不承诺硬实时可取消。
+首次 `Close(ctx)` 建立接收截止，并以该上下文限制日志排空；到期取消连接、释放积压记录并反馈未完成交付。只关闭库拥有的 HTTP 服务器，外部服务持有的 syslogger Handler 随后返回 503。已成功启动的文件出口串行写入最终快照并保留文件，未启动的出口保持原状态。最终快照之后注销自身 Collector，业务 Collector 和外部 promhttp 服务继续由调用方管理。重复 Close 复用收尾结果，后续 ctx 只限制本次等待。Collector 采集、文件系统和独立错误输出的底层 I/O 不承诺硬实时可取消。
 
 ```sh
 go test ./...

@@ -6,6 +6,7 @@ import (
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
 	"github.com/mctxyz/syslogger/internal/logging"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // SafeNew 纠正非法配置并返回完整可用的管理器，后续方法沿用各自的错误契约。
@@ -13,6 +14,18 @@ import (
 func SafeNew(cfg Config) *Manager {
 	cfg, corrections := cfg.corrected()
 	m := newManager(cfg)
+	if err := m.registry.Register(m); err != nil {
+		// 共享表冲突属于初始化配置异常，独立注册表使完整管理器继续提供自身指标。
+		m.cfg.Registry = nil
+		m.registry = prometheus.NewRegistry()
+		m.registry.MustRegister(m)
+		corrections = append(corrections, configCorrection{
+			field:     "Registry",
+			reason:    err.Error(),
+			effective: "private",
+			level:     logging.Error,
+		})
+	}
 	if len(corrections) == 0 {
 		return m
 	}

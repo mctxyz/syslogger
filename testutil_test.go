@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/record"
+	"github.com/prometheus/common/expfmt"
 )
 
 // capturedLog 同步捕获标准日志，供各类诊断测试共享。
@@ -128,6 +129,44 @@ func readSnapshot(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// hasMetricSample 按指标名及完整标签集合匹配数值，忽略官方编码的标签顺序和数字表示。
+func hasMetricSample(t testing.TB, text, name string, labels map[string]string, value float64) bool {
+	t.Helper()
+	var parser expfmt.TextParser
+	families, err := parser.TextToMetricFamilies(strings.NewReader(text))
+	if err != nil {
+		t.Fatalf("指标文本无效: %v", err)
+	}
+	family := families[name]
+	if family == nil {
+		return false
+	}
+	for _, metric := range family.Metric {
+		if len(metric.Label) != len(labels) {
+			continue
+		}
+		matches := true
+		for _, label := range metric.Label {
+			wanted, exists := labels[label.GetName()]
+			if !exists || label.GetValue() != wanted {
+				matches = false
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		if metric.Gauge != nil {
+			return metric.GetGauge().GetValue() == value
+		}
+		if metric.Counter != nil {
+			return metric.GetCounter().GetValue() == value
+		}
+		t.Fatalf("指标 %s 不是 Gauge 或 Counter", name)
+	}
+	return false
 }
 
 func socketDirectory(t testing.TB) string {

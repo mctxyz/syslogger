@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mctxyz/syslogger/internal/metrics"
 	"github.com/mctxyz/syslogger/internal/textfile"
 )
 
@@ -47,7 +46,11 @@ func (m *Manager) StartFile() error {
 }
 
 func (m *Manager) flush() error {
-	return textfile.Write(m.cfg.File.OutputPath, metrics.Encode(m.id, m.snapshot()))
+	data, err := m.metricsBytes()
+	if err != nil {
+		return err
+	}
+	return textfile.Write(m.cfg.File.OutputPath, data)
 }
 
 func (m *Manager) runFile() {

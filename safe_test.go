@@ -66,9 +66,9 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 	path := filepath.Join(socketDirectory(t), "startup.sock")
 	receiver := unixReceiver(t, path)
 	cfg := Config{
-		InstanceID:         "x",
-		MaxLabelValueBytes: -1,
-		SyslogSocketPath:   path,
+		InstanceID:           "x",
+		DefaultQueueCapacity: -1,
+		SyslogSocketPath:     path,
 		HTTP: HTTPConfig{
 			Enabled: true,
 		},
@@ -85,11 +85,11 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 		t.Fatalf("管理器未使用纠正后的配置：%+v", m.cfg)
 	}
 	wantLevels := map[string]logging.Level{
-		"File.Enabled":       logging.Error,
-		"MaxLabelValueBytes": logging.Warning,
-		"Project":            logging.Warning,
-		"InstanceID":         logging.Warning,
-		"StateEnabled":       logging.Warning,
+		"File.Enabled":         logging.Error,
+		"DefaultQueueCapacity": logging.Warning,
+		"Project":              logging.Warning,
+		"InstanceID":           logging.Warning,
+		"StateEnabled":         logging.Warning,
 	}
 	text := capture.String()
 	for field := range wantLevels {
@@ -149,8 +149,12 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
-	wantState := `syslogger_component_state{project="common",instance_id="common",component="syslogger_manager"} 3`
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), wantState) {
+	labels := map[string]string{
+		"project":     "common",
+		"instance_id": "common",
+		"component":   diagnostic.ComponentName,
+	}
+	if response.Code != http.StatusOK || !hasMetricSample(t, response.Body.String(), "syslogger_component_state", labels, 3) {
 		t.Fatalf("HTTP 指标未展示管理器异常：%s", response.Body.String())
 	}
 	if m.StartFile() == nil {
@@ -198,7 +202,7 @@ func TestSafeNewWorkingOutlets(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.SyslogSocketPath = path
 	cfg.StateEnabled = false
-	cfg.MaxLabelValueBytes = -1
+	cfg.DefaultQueueCapacity = -1
 	cfg.HTTP = HTTPConfig{
 		Enabled:    true,
 		ListenAddr: "127.0.0.1:0",
@@ -263,7 +267,12 @@ func TestSafeNewWorkingOutlets(t *testing.T) {
 	if string(body) != string(file) {
 		t.Fatal("专用 HTTP 指标与文件内容不一致")
 	}
-	if !strings.Contains(string(file), `component="syslogger_manager"} 3`) {
+	labels := map[string]string{
+		"project":     cfg.Project,
+		"instance_id": cfg.InstanceID,
+		"component":   diagnostic.ComponentName,
+	}
+	if !hasMetricSample(t, string(file), "syslogger_component_state", labels, 3) {
 		t.Fatal("指标出口未保留初始化异常状态")
 	}
 	if err := m.Close(context.Background()); err != nil {
@@ -285,9 +294,9 @@ func TestSafeNewUnavailableSyslog(t *testing.T) {
 			capture := captureLogs(t)
 			cfg := testConfig(t)
 			cfg.StateEnabled = stateEnabled
-			cfg.MaxLabelValueBytes = -1
+			cfg.DefaultQueueCapacity = -1
 			m := testSafeManager(t, cfg)
-			if !strings.Contains(capture.String(), `field="MaxLabelValueBytes"`) {
+			if !strings.Contains(capture.String(), `field="DefaultQueueCapacity"`) {
 				t.Fatal("syslog 不可用时丢失了初始化诊断")
 			}
 			rpc := testComponent(t, m, "rpc")

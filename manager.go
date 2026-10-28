@@ -9,7 +9,7 @@ import (
 	"github.com/mctxyz/syslogger/internal/diagnostic"
 	"github.com/mctxyz/syslogger/internal/identity"
 	"github.com/mctxyz/syslogger/internal/logging"
-	"github.com/mctxyz/syslogger/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type outletPhase uint8
@@ -30,6 +30,9 @@ type Manager struct {
 	startupLogs          *logging.Queue
 	registrationReporter diagnostic.Reporter
 	httpReporter         diagnostic.Reporter
+	metricsReporter      diagnostic.Reporter
+	registry             *prometheus.Registry
+	metricDescs          [len(metricDefinitions)]*prometheus.Desc
 	frozen               bool
 	closing              bool
 	starters             sync.WaitGroup
@@ -43,13 +46,17 @@ type Manager struct {
 	finalErr             error
 }
 
-// New 归一化实例默认值、校验配置并准备内存；文件和 socket I/O 由实际出口执行。
+// New 归一化实例默认值、校验配置并注册内置 Collector；文件和 socket I/O 由实际出口执行。
 func New(cfg Config) (*Manager, error) {
 	cfg, err := cfg.normalized()
 	if err != nil {
 		return nil, err
 	}
-	return newManager(cfg), nil
+	m := newManager(cfg)
+	if err := m.registry.Register(m); err != nil {
+		return nil, fmt.Errorf("syslogger: 注册内置指标: %w", err)
+	}
+	return m, nil
 }
 
 // newManager 为两个构造入口建立相同的完整内部状态，配置由各入口完成处理。
@@ -66,11 +73,27 @@ func newManager(cfg Config) *Manager {
 	if cfg.StateEnabled {
 		m.diagnostic = diagnostic.New(time.Now())
 	}
+	m.registry = cfg.Registry
+	if m.registry == nil {
+		m.registry = prometheus.NewRegistry()
+	}
+	labels := prometheus.Labels{
+		"project":     m.id.Project,
+		"instance_id": m.id.InstanceID,
+	}
+	for index, definition := range metricDefinitions {
+		m.metricDescs[index] = prometheus.NewDesc(
+			definition.name,
+			definition.help,
+			[]string{"component"},
+			labels,
+		)
+	}
 	return m
 }
 
 // Register 建立独立模块；容量 1～4096 使用原值，其余值采用 Config.DefaultQueueCapacity。
-// 模块集合在交出 Handler 或开始启动指标出口时固定。
+// 模块集合在交出 Handler、开始启动指标出口或首次 Registry 采集时固定。
 func (m *Manager) Register(name string, queueCapacity int) (component *Component, err error) {
 	m.mu.Lock()
 	added := false
@@ -91,7 +114,7 @@ func (m *Manager) Register(name string, queueCapacity int) (component *Component
 		return nil, fmt.Errorf("syslogger: 当前生命周期阶段无法注册组件")
 	}
 	kind := ""
-	if nameErr := validateName(name, m.cfg.MaxLabelValueBytes); nameErr != nil {
+	if nameErr := validateName(name); nameErr != nil {
 		kind = diagnostic.RegisterNameInvalid
 		err = fmt.Errorf("syslogger: 注册名称: %w", nameErr)
 	} else if name == diagnostic.ComponentName {
@@ -118,29 +141,4 @@ func (m *Manager) Register(name string, queueCapacity int) (component *Component
 	}
 	component.logs = logging.New(queueCapacity, m.cfg.SyslogSocketPath, m.id.Project, m.id.InstanceID, name)
 	return component, nil
-}
-
-func (m *Manager) snapshot() []metrics.Component {
-	m.mu.RLock()
-	components := make([]*Component, 0, len(m.components))
-	for _, component := range m.components {
-		components = append(components, component)
-	}
-	var result []metrics.Component
-	if m.diagnostic != nil {
-		result = append(result, metrics.Component{Name: diagnostic.ComponentName, Record: m.diagnostic.Current})
-	}
-	m.mu.RUnlock()
-	for _, component := range components {
-		component.mu.RLock()
-		item := metrics.Component{
-			Name:    component.name,
-			Record:  component.healthAt(time.Now()),
-			HasLogs: true,
-		}
-		component.mu.RUnlock()
-		item.Rejected, item.SendFailures = component.logs.Counts()
-		result = append(result, item)
-	}
-	return result
 }

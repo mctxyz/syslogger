@@ -81,6 +81,8 @@ func (m *Manager) finish(ctx context.Context, components []*Component) {
 			errs = append(errs, err)
 		}
 	}
+	// 最终快照完成后释放自身注册，业务 Collector 继续由共享表的持有方管理。
+	m.registry.Unregister(m)
 	if len(errs) == 1 {
 		m.finalErr = errs[0]
 	} else if len(errs) > 1 {

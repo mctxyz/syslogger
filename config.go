@@ -5,13 +5,12 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
-	defaultFlushInterval      = 10 * time.Second
-	defaultMaxLabelValueBytes = 2048
-	// 保持既有身份标签容量的合法配置范围。
-	minimumMaxLabelValueBytes = 21
+	defaultFlushInterval = 10 * time.Second
 	// 队满后的默认观察期以连续无丢弃时间判断恢复。
 	defaultQueueFullRecoveryInterval = 30 * time.Second
 	// defaultQueueCapacity 是未配置时使用的模块日志队列容量。
@@ -40,8 +39,9 @@ type Config struct {
 	HTTP HTTPConfig
 	// File 配置周期文件交付，零值关闭。
 	File FileConfig
-	// MaxLabelValueBytes 限制转义前身份标签的字节数，零值为 2048。
-	MaxLabelValueBytes int
+	// Registry 指定与业务共享的指标注册表，nil 时使用管理器独立的注册表。
+	// 注册表由 prometheus.NewRegistry 等官方构造函数创建。
+	Registry *prometheus.Registry
 }
 
 // HTTPConfig 定义固定生命周期的 HTTP 指标能力。
@@ -62,13 +62,10 @@ type FileConfig struct {
 
 func (cfg Config) normalized() (Config, error) {
 	cfg = cfg.withDefaults()
-	if cfg.MaxLabelValueBytes < minimumMaxLabelValueBytes {
-		return Config{}, fmt.Errorf("syslogger: 标签上限至少为 %d 字节", minimumMaxLabelValueBytes)
-	}
-	if err := validateName(cfg.Project, cfg.MaxLabelValueBytes); err != nil {
+	if err := validateName(cfg.Project); err != nil {
 		return Config{}, fmt.Errorf("syslogger: Project: %w", err)
 	}
-	if err := validateInstanceID(cfg.InstanceID, cfg.MaxLabelValueBytes); err != nil {
+	if err := validateInstanceID(cfg.InstanceID); err != nil {
 		return Config{}, err
 	}
 	if cfg.DefaultQueueCapacity < 1 || cfg.DefaultQueueCapacity > maximumQueueCapacity {
@@ -100,9 +97,6 @@ func (cfg Config) withDefaults() Config {
 	if cfg.InstanceID == "" {
 		cfg.InstanceID = "common"
 	}
-	if cfg.MaxLabelValueBytes == 0 {
-		cfg.MaxLabelValueBytes = defaultMaxLabelValueBytes
-	}
 	if cfg.DefaultQueueCapacity == 0 {
 		cfg.DefaultQueueCapacity = defaultQueueCapacity
 	}
@@ -115,21 +109,20 @@ func (cfg Config) withDefaults() Config {
 	return cfg
 }
 
-func validateInstanceID(id string, maxBytes int) error {
+func validateInstanceID(id string) error {
 	validLength := len(id) >= 3 && len(id) <= 128
-	withinLabelLimit := len(id) <= maxBytes
-	if !validLength || !withinLabelLimit || !utf8.ValidString(id) {
-		return fmt.Errorf("syslogger: InstanceID 必须为 3～128 字节且符合标签上限的合法 UTF-8")
+	if !validLength || !utf8.ValidString(id) {
+		return fmt.Errorf("syslogger: InstanceID 必须为 3～128 字节的合法 UTF-8")
 	}
 	return nil
 }
 
-func validateName(name string, maxBytes int) error {
+func validateName(name string) error {
 	if name == "" || strings.TrimSpace(name) == "" {
 		return fmt.Errorf("名称必须包含非空白字符")
 	}
-	if len(name) > maxBytes || !utf8.ValidString(name) {
-		return fmt.Errorf("名称必须为符合标签上限的合法 UTF-8")
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("名称必须为合法 UTF-8")
 	}
 	return nil
 }

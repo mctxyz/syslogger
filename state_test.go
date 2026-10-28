@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -141,26 +140,29 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
-	degradedLine := `syslogger_component_state{project="demo",instance_id="instance-a",component="saturated"} 2` + "\n"
+	labels := map[string]string{
+		"project":     cfg.Project,
+		"instance_id": cfg.InstanceID,
+		"component":   "saturated",
+	}
 	for _, text := range []string{response.Body.String(), string(readSnapshot(t, cfg.File.OutputPath))} {
-		if !strings.Contains(text, degradedLine) {
+		if !hasMetricSample(t, text, "syslogger_component_state", labels, 2) {
 			t.Fatalf("指标出口未展示自动降级: %s", text)
 		}
 	}
 	rejectedBefore, _ := a.logs.Counts()
-	healthyLine := `syslogger_component_state{project="demo",instance_id="instance-a",component="saturated"} 1` + "\n"
 	// socket 持续停止读取，恢复由无丢弃窗口决定，并由已有周期快照自然显示。
 	waitUntil(t, func() bool {
 		state := currentRecord(t, m, "saturated").State
 		file := string(readSnapshot(t, cfg.File.OutputPath))
-		return state == int(StateHealthy) && strings.Contains(file, healthyLine)
+		return state == int(StateHealthy) && hasMetricSample(t, file, "syslogger_component_state", labels, 1)
 	})
 	if rejected, _ := a.logs.Counts(); rejected != rejectedBefore {
 		t.Fatal("自动恢复改变了累计拒收次数")
 	}
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
-	if !strings.Contains(response.Body.String(), healthyLine) {
+	if !hasMetricSample(t, response.Body.String(), "syslogger_component_state", labels, 1) {
 		t.Fatal("HTTP 快照未按无丢弃窗口恢复")
 	}
 	a.Unhealthy()
@@ -179,7 +181,7 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 		t.Fatalf("背压关闭未保留取消原因: %v", err)
 	}
 	finalFile := readSnapshot(t, cfg.File.OutputPath)
-	if frozen.State != int(StateDegraded) || !strings.Contains(string(finalFile), degradedLine) {
+	if frozen.State != int(StateDegraded) || !hasMetricSample(t, string(finalFile), "syslogger_component_state", labels, 2) {
 		t.Fatal("最终文件未保留截止时的自动降级")
 	}
 	time.Sleep(time.Until(lastDrop.Add(cfg.QueueFullRecoveryInterval)) + time.Millisecond)

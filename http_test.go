@@ -27,7 +27,12 @@ func TestExternalHandlerAndFixedCollection(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/custom", nil))
 	text := response.Body.String()
-	if response.Code != 200 || !strings.Contains(response.Header().Get("Content-Type"), "version=0.0.4") || !strings.Contains(text, `syslogger_component_state{project="demo",instance_id="instance-a",component="rpc"} 3`) {
+	labels := map[string]string{
+		"project":     "demo",
+		"instance_id": "instance-a",
+		"component":   "rpc",
+	}
+	if response.Code != 200 || !strings.Contains(response.Header().Get("Content-Type"), "version=0.0.4") || !hasMetricSample(t, text, "syslogger_component_state", labels, 3) {
 		t.Fatalf("指标响应不符: %s", text)
 	}
 	if err := m.Close(context.Background()); err != nil {

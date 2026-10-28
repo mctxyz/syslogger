@@ -37,15 +37,6 @@ func (cfg Config) corrected() (Config, []configCorrection) {
 			level:     logging.Warning,
 		})
 	}
-	if cfg.MaxLabelValueBytes < minimumMaxLabelValueBytes {
-		cfg.MaxLabelValueBytes = defaultMaxLabelValueBytes
-		corrections = append(corrections, configCorrection{
-			field:     "MaxLabelValueBytes",
-			reason:    fmt.Sprintf("标签上限必须至少为 %d 字节", minimumMaxLabelValueBytes),
-			effective: cfg.MaxLabelValueBytes,
-			level:     logging.Warning,
-		})
-	}
 	if cfg.Project == "" {
 		cfg.Project = "common"
 		corrections = append(corrections, configCorrection{
@@ -54,7 +45,7 @@ func (cfg Config) corrected() (Config, []configCorrection) {
 			effective: cfg.Project,
 			level:     logging.Warning,
 		})
-	} else if err := validateName(cfg.Project, cfg.MaxLabelValueBytes); err != nil {
+	} else if err := validateName(cfg.Project); err != nil {
 		cfg.Project = "unknown"
 		corrections = append(corrections, configCorrection{
 			field:     "Project",
@@ -63,7 +54,7 @@ func (cfg Config) corrected() (Config, []configCorrection) {
 			level:     logging.Warning,
 		})
 	}
-	if err := validateInstanceID(cfg.InstanceID, cfg.MaxLabelValueBytes); err != nil {
+	if err := validateInstanceID(cfg.InstanceID); err != nil {
 		cfg.InstanceID = "common"
 		corrections = append(corrections, configCorrection{
 			field:     "InstanceID",

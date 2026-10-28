@@ -6,8 +6,6 @@ import (
 	"net"
 	"net/http"
 	"time"
-
-	"github.com/mctxyz/syslogger/internal/metrics"
 )
 
 // Handler 固定采集集合并返回指标处理器，外部服务器的生命周期由业务管理。
@@ -32,7 +30,11 @@ func (m *Manager) serveMetrics(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, "syslogger: 管理器已关闭", http.StatusServiceUnavailable)
 		return
 	}
-	data := metrics.Encode(m.id, m.snapshot())
+	data, err := m.metricsBytes()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	if request.Method != http.MethodHead {
 		_, _ = w.Write(data)

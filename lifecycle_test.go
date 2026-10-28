@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +29,12 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := readSnapshot(t, cfg.File.OutputPath)
-	if !strings.Contains(string(first), `component="rpc"} 2`) {
+	labels := map[string]string{
+		"project":     cfg.Project,
+		"instance_id": cfg.InstanceID,
+		"component":   "rpc",
+	}
+	if !hasMetricSample(t, string(first), "syslogger_component_state", labels, 2) {
 		t.Fatal("StartFile 返回时首次快照缺失")
 	}
 	if m.StartFile() == nil {
@@ -38,14 +42,14 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 	}
 	c.Unhealthy()
 	waitUntil(t, func() bool {
-		return strings.Contains(string(readSnapshot(t, cfg.File.OutputPath)), `component="rpc"} 3`)
+		return hasMetricSample(t, string(readSnapshot(t, cfg.File.OutputPath)), "syslogger_component_state", labels, 3)
 	})
 	c.Healthy()
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	final := readSnapshot(t, cfg.File.OutputPath)
-	if !strings.Contains(string(final), `component="rpc"} 1`) {
+	if !hasMetricSample(t, string(final), "syslogger_component_state", labels, 1) {
 		t.Fatal("最终快照未覆盖周期快照")
 	}
 	time.Sleep(3 * cfg.File.FlushInterval)
@@ -136,8 +140,12 @@ func TestFinalFileIncludesLogCloseCounters(t *testing.T) {
 	_ = m.Close(context.Background())
 	_, failed := c.logs.Counts()
 	text := string(readSnapshot(t, cfg.File.OutputPath))
-	line := fmt.Sprintf(`syslogger_component_log_send_failures_total{project="demo",instance_id="instance-a",component="rpc"} %d`+"\n", failed)
-	if !strings.Contains(text, line) {
+	labels := map[string]string{
+		"project":     cfg.Project,
+		"instance_id": cfg.InstanceID,
+		"component":   "rpc",
+	}
+	if !hasMetricSample(t, text, "syslogger_component_log_send_failures_total", labels, float64(failed)) {
 		t.Fatalf("最终文件未包含日志收尾计数: %s", text)
 	}
 }
