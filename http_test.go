@@ -21,7 +21,7 @@ func TestExternalHandlerAndFixedCollection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Register("late", 1); err == nil {
+	if _, err := m.Register(ComponentConfig{Name: "late", QueueCapacity: 1}); err == nil {
 		t.Fatal("Handler 后仍允许注册")
 	}
 	response := httptest.NewRecorder()

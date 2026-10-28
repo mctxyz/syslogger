@@ -173,7 +173,7 @@ func TestSharedRegistryExportsBusinessMetrics(t *testing.T) {
 	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), file) {
 		t.Fatal("外部 promhttp 未同时导出内置与业务指标")
 	}
-	if _, err := m.Register("late", 1); err == nil {
+	if _, err := m.Register(ComponentConfig{Name: "late", QueueCapacity: 1}); err == nil {
 		t.Fatal("导出开始后仍允许增加业务组件")
 	}
 	if err := m.Close(context.Background()); err != nil {
@@ -244,7 +244,7 @@ func TestRegistryGatherFreezesComponents(t *testing.T) {
 	if _, err := registry.Gather(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Register("late", 1); err == nil {
+	if _, err := m.Register(ComponentConfig{Name: "late", QueueCapacity: 1}); err == nil {
 		t.Fatal("首次 Registry 采集未固定组件集合")
 	}
 	metric := prometheus.NewGauge(prometheus.GaugeOpts{

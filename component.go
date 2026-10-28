@@ -15,6 +15,7 @@ import (
 type Component struct {
 	manager     *Manager
 	name        string
+	description string
 	logs        *logging.Queue
 	logReporter diagnostic.Reporter
 	mu          sync.RWMutex

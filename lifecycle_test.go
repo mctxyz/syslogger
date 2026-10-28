@@ -120,7 +120,7 @@ func TestFinalFileIncludesLogCloseCounters(t *testing.T) {
 	cfg.SyslogSocketPath = path
 	cfg.File.Enabled = true
 	m := testManager(t, cfg)
-	c, err := m.Register("rpc", 64)
+	c, err := m.Register(ComponentConfig{Name: "rpc", QueueCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}

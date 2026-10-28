@@ -125,7 +125,7 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 		t.Fatal("配置纠正未形成管理器不健康事实")
 	}
 	rpc := testComponent(t, m, "rpc")
-	if _, err := m.Register("rpc", 512); err == nil {
+	if _, err := m.Register(ComponentConfig{Name: "rpc", QueueCapacity: 512}); err == nil {
 		t.Fatal("重复注册的原有错误契约被改变")
 	}
 	testComponent(t, m, "worker")
@@ -175,7 +175,7 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 	if err := m.startupLogs.Wait(); err != nil {
 		t.Fatalf("初始化日志队列未正确收尾：%v", err)
 	}
-	if _, err := m.Register("closed", 512); err == nil {
+	if _, err := m.Register(ComponentConfig{Name: "closed", QueueCapacity: 512}); err == nil {
 		t.Fatal("关闭后仍允许注册组件")
 	}
 	rpc.Info("closed", nil)

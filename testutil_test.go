@@ -93,7 +93,7 @@ func testManager(t *testing.T, cfg Config) *Manager {
 
 func testComponent(t *testing.T, m *Manager, name string) *Component {
 	t.Helper()
-	c, err := m.Register(name, 0)
+	c, err := m.Register(ComponentConfig{Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}

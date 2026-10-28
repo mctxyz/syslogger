@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mctxyz/syslogger/internal/catalog"
 	"github.com/mctxyz/syslogger/internal/diagnostic"
 	"github.com/mctxyz/syslogger/internal/identity"
 	"github.com/mctxyz/syslogger/internal/logging"
@@ -31,6 +32,9 @@ type Manager struct {
 	registrationReporter diagnostic.Reporter
 	httpReporter         diagnostic.Reporter
 	metricsReporter      diagnostic.Reporter
+	catalogReporter      diagnostic.Reporter
+	catalog              *catalog.Store
+	catalogMu            sync.Mutex
 	registry             *prometheus.Registry
 	metricDescs          [len(metricDefinitions)]*prometheus.Desc
 	frozen               bool
@@ -46,7 +50,8 @@ type Manager struct {
 	finalErr             error
 }
 
-// New 归一化实例默认值、校验配置并注册内置 Collector；文件和 socket I/O 由实际出口执行。
+// New 校验配置并注册内置 Collector，启用日志名称目录时发布初始清单。
+// 日志交付及指标出口的文件和 socket I/O 由各自的实际出口执行。
 func New(cfg Config) (*Manager, error) {
 	cfg, err := cfg.normalized()
 	if err != nil {
@@ -56,6 +61,7 @@ func New(cfg Config) (*Manager, error) {
 	if err := m.registry.Register(m); err != nil {
 		return nil, fmt.Errorf("syslogger: 注册内置指标: %w", err)
 	}
+	m.publishCatalog()
 	return m, nil
 }
 
@@ -72,6 +78,9 @@ func newManager(cfg Config) *Manager {
 	}
 	if cfg.StateEnabled {
 		m.diagnostic = diagnostic.New(time.Now())
+	}
+	if cfg.CatalogEnabled {
+		m.catalog = &catalog.Store{Root: catalog.Root}
 	}
 	m.registry = cfg.Registry
 	if m.registry == nil {
@@ -92,9 +101,18 @@ func newManager(cfg Config) *Manager {
 	return m
 }
 
-// Register 建立独立模块；容量 1～4096 使用原值，其余值采用 Config.DefaultQueueCapacity。
+// ComponentConfig 定义模块的日志身份、展示描述和独立队列容量。
+type ComponentConfig struct {
+	Name        string
+	Description string
+	// QueueCapacity 为 1～4096 时使用原值，其余值采用 Config.DefaultQueueCapacity。
+	QueueCapacity int
+}
+
+// Register 根据配置建立独立模块，成功后更新已启用的日志名称目录。
 // 模块集合在交出 Handler、开始启动指标出口或首次 Registry 采集时固定。
-func (m *Manager) Register(name string, queueCapacity int) (component *Component, err error) {
+func (m *Manager) Register(cfg ComponentConfig) (component *Component, err error) {
+	name, queueCapacity := cfg.Name, cfg.QueueCapacity
 	m.mu.Lock()
 	added := false
 	defer func() {
@@ -108,6 +126,8 @@ func (m *Manager) Register(name string, queueCapacity int) (component *Component
 		m.mu.Unlock()
 		if err != nil {
 			m.registrationReporter.Printf("project=%q instance_id=%q: 注册组件失败: %v", m.id.Project, m.id.InstanceID, err)
+		} else {
+			m.publishCatalog()
 		}
 	}()
 	if m.closing || m.frozen {
@@ -133,7 +153,7 @@ func (m *Manager) Register(name string, queueCapacity int) (component *Component
 	if queueCapacity < 1 || queueCapacity > maximumQueueCapacity {
 		queueCapacity = m.cfg.DefaultQueueCapacity
 	}
-	component = &Component{manager: m, name: name}
+	component = &Component{manager: m, name: name, description: cfg.Description}
 	m.components[name] = component
 	added = true
 	if m.cfg.StateEnabled {

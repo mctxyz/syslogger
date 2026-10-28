@@ -19,12 +19,16 @@ const (
 	maximumQueueCapacity = 4096
 )
 
-// Config 固定一个项目运行实例的身份、状态维护及指标出口配置。
+// Config 固定一个项目运行实例的身份、日志名称目录、状态维护及指标出口配置。
 type Config struct {
 	// Project 由接入项目的业务代码固定提供。
 	Project string
 	// InstanceID 由业务入口提供，空字符串使用 common，跨重启复用。
 	InstanceID string
+	// InstanceDescription 描述实例用途，供本机日志名称目录展示。
+	InstanceDescription string
+	// CatalogEnabled 将项目、实例及组件目录发布到 /tmp/mct-syslogger，零值关闭。
+	CatalogEnabled bool
 	// SyslogSocketPath 指定本机 Unix socket；空值按系统标准路径发现。
 	SyslogSocketPath string
 	// DefaultQueueCapacity 指定模块日志队列的默认容量，零值为 512，合法范围为 1～4096。

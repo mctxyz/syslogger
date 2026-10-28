@@ -24,10 +24,20 @@ manager, err := syslogger.New(syslogger.Config{
     StateEnabled: true,
     HTTP: syslogger.HTTPConfig{Enabled: true, ListenAddr: ":9091"},
 })
-if err != nil { return err }
-rpc, err := manager.Register("rpc", 512)
-if err != nil { return err }
-if err := manager.StartHTTP(); err != nil { return err }
+if err != nil {
+    return err
+}
+rpc, err := manager.Register(syslogger.ComponentConfig{
+    Name: "rpc",
+    Description: "区块与日志获取",
+    QueueCapacity: 512,
+})
+if err != nil {
+    return err
+}
+if err := manager.StartHTTP(); err != nil {
+    return err
+}
 rpc.Unhealthy()
 ```
 
@@ -90,14 +100,17 @@ rpc.Healthy()
 
 每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Config.DefaultQueueCapacity` 为管理器设置模块默认容量，零值为 512，合法范围为 1～4096，`New` 和 `SafeNew` 均可配置。`New` 拒绝非法默认容量，`SafeNew` 回退 512 并记录配置纠正。
 
-`Register(name, capacity)` 两参数必传，1～4096 使用原值，其余使用该管理器的默认容量。因此 `Register("rpc", 0)` 使用配置的默认值，`Register("worker", 256)` 为该模块指定 256 条队列：
+`Register(ComponentConfig)` 按 `Name` 建立模块，`Description` 用于日志名称目录展示。`QueueCapacity` 为 1～4096 时使用原值，零值及其他值采用管理器默认容量。例如：
 
 ```go
 manager := syslogger.SafeNew(syslogger.Config{
     Project: "demo",
     DefaultQueueCapacity: 1024,
 })
-rpc, err := manager.Register("rpc", 0)
+rpc, err := manager.Register(syslogger.ComponentConfig{
+    Name: "rpc",
+    Description: "区块与日志获取",
+})
 if err != nil {
     return err
 }
@@ -114,14 +127,49 @@ rpc.Info("组件已注册", nil)
 
 ### 日志检索
 
-[tools/syslogger-log](tools/syslogger-log) 提供独立 Go 命令，支持按项目、实例、模块、等级、时间、关键词和正则过滤，以及实时跟踪、彩色输出和 JSON 输出：
+[tools/mct-syslogger](tools/mct-syslogger) 提供独立 Go 命令，支持项目／实例／组件目录、日志过滤、实时跟踪、彩色输出和 JSON 输出：
 
 ```sh
-go build -o tools/bin/syslogger-log ./tools/syslogger-log
-./tools/bin/syslogger-log -p contract-listener -I local-a -c rpc --since=-2h -k '超时'
+go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
+./tools/bin/mct-syslogger --list
+./tools/bin/mct-syslogger -p contract-listener -I local-a -c rpc --since=-2h -k '超时'
 ```
 
 编译使用 Go 1.19+，运行环境为 Linux 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。
+
+### 本机日志名称目录
+
+`CatalogEnabled` 默认关闭，开启后将实例及组件描述发布到固定的 `/tmp/mct-syslogger`，与 `TMPDIR`、状态维护及指标出口配置独立：
+
+```go
+manager, err := syslogger.New(syslogger.Config{
+    Project: "contract-listener",
+    InstanceID: "mainnet-a",
+    InstanceDescription: "主网事件监听",
+    CatalogEnabled: true,
+})
+if err != nil {
+    return err
+}
+defer manager.Close(context.Background())
+rpc, err := manager.Register(syslogger.ComponentConfig{
+    Name: "rpc",
+    Description: "区块与日志获取",
+    QueueCapacity: 512,
+})
+if err != nil {
+    return err
+}
+rpc.Info("RPC 已连接", nil)
+```
+
+构造成功后以本次空的业务组件集合覆盖旧清单，组件注册成功后发布完整新清单；状态维护开启时目录同时包含 `syslogger_manager`，容错初始化产生的结构化诊断也使用这个组件名。描述只供目录展示，日志及指标继续使用原有身份。
+
+清单按项目和实例保存 JSON，项目目录名为项目原文的 SHA-256 十六进制摘要，实例文件名为实例 ID 的 SHA-256 十六进制摘要加 `.json`；名称与描述保存在 JSON 中，供工具以原文组织目录。固定长度路径兼容现有身份中的斜杠、空白及长项目名。
+
+根目录和项目目录为 `0777`，JSON 文件为 `0666`，面向受信本机环境公开读写。创建目录时幂等复用，发布时使用同目录临时文件和原子替换。目录发布失败通过标准日志诊断，组件注册、日志及指标能力继续按原契约工作。
+
+`Close` 保留清单，后续运行重新生成并覆盖，已移除组件随完整清单替换。同一项目和实例的并行发布以最后完成的写入为准。目录保存最近登记的名称，用于选择历史日志过滤条件；历史日志按 journal 留存范围查询，用户也可以直接输入目录中尚未登记的名称。共享临时目录可能被系统或管理员清理，后续运行及注册组件时重新发布。
 
 ## 健康与指标
 
@@ -177,7 +225,7 @@ if err != nil {
     return err
 }
 defer manager.Close(context.Background())
-rpc, err := manager.Register("rpc", 512)
+rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacity: 512})
 if err != nil {
     return err
 }

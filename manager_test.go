@@ -14,7 +14,7 @@ func TestRegistrationCapacityAndPreservation(t *testing.T) {
 	m := testManager(t, testConfig(t))
 	initial := currentRecord(t, m, diagnostic.ComponentName)
 	for _, capacity := range []int{-1, 0, 1, 4095, 4096, 4097} {
-		c, err := m.Register(fmt.Sprint(capacity), capacity)
+		c, err := m.Register(ComponentConfig{Name: fmt.Sprint(capacity), QueueCapacity: capacity})
 		if err != nil || c.logs == nil {
 			t.Fatalf("容量 %d 未成功注册: %v", capacity, err)
 		}
@@ -31,7 +31,7 @@ func TestRegistrationCapacityAndPreservation(t *testing.T) {
 		t.Fatal("普通成功注册改变了初始化事实")
 	}
 	for _, name := range []string{"", " \t", "bad\xff", diagnostic.ComponentName, "rpc"} {
-		if next, err := m.Register(name, 1); next != nil || err == nil {
+		if next, err := m.Register(ComponentConfig{Name: name, QueueCapacity: 1}); next != nil || err == nil {
 			t.Fatalf("非法名称未拒绝: %q", name)
 		}
 		if m.components["rpc"] != c || currentRecord(t, m, "rpc") != fact {
@@ -75,7 +75,7 @@ func TestConfiguredDefaultQueueCapacity(t *testing.T) {
 					t.Fatal("默认容量归一化不符或修改了调用方配置")
 				}
 				for _, requested := range []int{-1, 0, 1, 4095, 4096, 4097} {
-					component, err := manager.Register(fmt.Sprint(requested), requested)
+					component, err := manager.Register(ComponentConfig{Name: fmt.Sprint(requested), QueueCapacity: requested})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -149,14 +149,14 @@ func TestRegistrationPanicIsolation(t *testing.T) {
 	c := testComponent(t, m, "rpc")
 	tracker := m.diagnostic
 	m.diagnostic = nil
-	component, err := m.Register("new", 1)
+	component, err := m.Register(ComponentConfig{Name: "new", QueueCapacity: 1})
 	m.diagnostic = tracker
 	if component != nil || err == nil || m.components["new"] != nil || m.components["rpc"] != c {
 		t.Fatal("注册 panic 未回收本次部分状态")
 	}
 	components := m.components
 	m.components = nil
-	component, err = m.Register("map-panic", 1)
+	component, err = m.Register(ComponentConfig{Name: "map-panic", QueueCapacity: 1})
 	m.components = components
 	if component != nil || err == nil {
 		t.Fatal("注册存储 panic 未转换为错误")

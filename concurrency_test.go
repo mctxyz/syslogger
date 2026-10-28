@@ -60,7 +60,7 @@ func TestConcurrentOutletsRegisterAndClose(t *testing.T) {
 			defer workers.Done()
 			switch n % 4 {
 			case 0:
-				_, _ = m.Register(fmt.Sprint(n), 1)
+				_, _ = m.Register(ComponentConfig{Name: fmt.Sprint(n), QueueCapacity: 1})
 			case 1:
 				_ = m.StartHTTP()
 			case 2:
@@ -88,7 +88,7 @@ func TestConcurrentQueueHealthAndClose(t *testing.T) {
 	cfg.DegradeOnQueueFull = true
 	cfg.QueueFullRecoveryInterval = time.Millisecond
 	m := testManager(t, cfg)
-	c, err := m.Register("rpc", 1)
+	c, err := m.Register(ComponentConfig{Name: "rpc", QueueCapacity: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

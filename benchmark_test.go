@@ -38,7 +38,7 @@ func BenchmarkLogDelivery(b *testing.B) {
 						defer manager.Close(context.Background())
 						components := make([]*Component, modules)
 						for i := range components {
-							components[i], err = manager.Register(fmt.Sprint(i), capacity)
+							components[i], err = manager.Register(ComponentConfig{Name: fmt.Sprint(i), QueueCapacity: capacity})
 							if err != nil {
 								b.Fatal(err)
 							}

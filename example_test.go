@@ -17,7 +17,7 @@ func ExampleComponent_Unhealthy() {
 		panic(err)
 	}
 	defer manager.Close(context.Background())
-	rpc, err := manager.Register("rpc", 512)
+	rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacity: 512})
 	if err != nil {
 		panic(err)
 	}
@@ -41,7 +41,7 @@ func ExampleSafeNew() {
 		},
 	})
 	defer manager.Close(context.Background())
-	rpc, err := manager.Register("rpc", 512)
+	rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacity: 512})
 	if err != nil {
 		panic(err)
 	}
@@ -70,7 +70,7 @@ func ExampleManager_Registry() {
 		panic(err)
 	}
 	defer manager.Close(context.Background())
-	rpc, err := manager.Register("rpc", 512)
+	rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacity: 512})
 	if err != nil {
 		panic(err)
 	}

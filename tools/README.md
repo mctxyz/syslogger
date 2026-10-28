@@ -1,31 +1,63 @@
 # 日志检索工具
 
-`syslogger-log` 使用 Go 标准库调用本机 `journalctl`，解析 syslogger 的 JSON 正文并过滤。工具源码集中在 [syslogger-log/main.go](syslogger-log/main.go)，编译后只需分发一个二进制。运行环境为使用 systemd journal 的 Linux，当前用户需要相应的日志读取权限。
+`mct-syslogger` 提供本机日志名称目录和日志检索。目录查询读取共享 JSON，日志检索通过 Go 标准库调用本机 `journalctl`，解析 syslogger 正文并过滤。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、目录显示和 journal 查询按职责分文件组织。编译后只需分发一个二进制；日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
 
 ## 运行与快捷命令
 
 在仓库目录使用 Go 1.19+ 编译并运行：
 
 ```sh
-go build -o tools/bin/syslogger-log ./tools/syslogger-log
-./tools/bin/syslogger-log --help
-./tools/bin/syslogger-log --project syslogger-test --instance-id syslogger-test --component rpc
+go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
+./tools/bin/mct-syslogger --help
+./tools/bin/mct-syslogger --project syslogger-test --instance-id syslogger-test --component rpc
 ```
 
 可以在 shell 配置中添加别名（替换为实际仓库绝对路径）：
 
 ```sh
-alias slog='/path/to/syslogger/tools/bin/syslogger-log'
+alias slog='/path/to/syslogger/tools/bin/mct-syslogger'
 ```
 
 也可以直接复制二进制到 PATH 中的个人目录，作为独立命令使用：
 
 ```sh
 mkdir -p "$HOME/.local/bin"
-install -m 755 /path/to/syslogger/tools/bin/syslogger-log "$HOME/.local/bin/syslogger-log"
+install -m 755 /path/to/syslogger/tools/bin/mct-syslogger "$HOME/.local/bin/mct-syslogger"
 ```
 
-需要提升 journal 读取权限时，在命令前使用 `sudo`，例如 `sudo /path/to/syslogger/tools/bin/syslogger-log -I local-a`。工具只执行查询，不更改日志权限和留存配置。`tools/bin/` 是已忽略的本地构建目录，运行二进制时需要设备提供 `journalctl`。
+需要提升 journal 读取权限时，在命令前使用 `sudo`，例如 `sudo /path/to/syslogger/tools/bin/mct-syslogger -I local-a`。工具只执行查询，不更改日志权限和留存配置。`tools/bin/` 是已忽略的本地构建目录。
+
+## 查看项目、实例与组件目录
+
+业务开启 `Config.CatalogEnabled` 后，syslogger 向 `/tmp/mct-syslogger` 发布目录。`Config.InstanceDescription` 描述实例用途，组件通过 `Register(ComponentConfig)` 提供名称及 `Description`。目录开关默认关闭，与日志及指标出口独立。
+
+```sh
+# 查看全部项目、实例和组件。
+slog --list
+
+# 查看一个项目或一个实例。
+slog --list -p contract-listener
+slog --list -p contract-listener -I mainnet-a
+
+# 按组件筛选，或输出机器可读的 JSON 数组。
+slog --list -c rpc --colour
+slog --list --json
+```
+
+树形输出示例：
+
+```text
+contract-listener
+└── mainnet-a  主网事件监听
+    ├── rpc  区块与日志获取
+    └── worker  事件处理
+```
+
+目录按项目、实例和组件名称排序。`-p`、`-I`、`-c` 使用原文精确匹配，同类重复取 OR，不同条件取 AND；指定组件筛选后只显示匹配组件及其所属实例。`--json` 输出实例对象数组，其中包含 `project`、`instance_id`、`instance_description` 和 `components`。
+
+目录查询直接读取固定路径，与各进程的 `TMPDIR` 无关，也可在未安装 `journalctl` 时使用。目录尚未创建或筛选无结果时正常返回空列表；JSON 格式错误和实际文件读取失败明确报错。目录模式只接受身份筛选、`--json` 和 `--colour`，日志时间、等级、内容、条数和跟踪参数用于日志查询模式。
+
+清单在启动时重新生成、注册组件后更新，程序退出后保留，适合查找历史日志使用的名称。目录可由本机所有用户维护；项目和实例的磁盘文件名使用 SHA-256 摘要，JSON 保留身份原文。同一身份并行发布时最后完成的写入可见。临时目录被清理后，原有日志仍按 journal 留存范围查询，可以继续手动指定身份筛选。
 
 ## 查询示例
 
@@ -76,6 +108,7 @@ slog -I local-a -n 500 --json
 | `-n / --lines` | 匹配后的数量上限；`0` 表示全部 |
 | `-f / --follow` | 从起始时间连续读取并即时输出，达到显式 `-n` 上限后退出 |
 | `--json` | 输出原始正文内容的单行 JSON，保留业务字段 |
+| `--list` | 展示项目／实例／组件目录，支持身份筛选及 JSON、彩色输出 |
 | `--colour` | 开启 ANSI 彩色可读输出，默认关闭；`--colour=false` 显式关闭 |
 
 - 同一个身份或等级参数重复时取 **OR**，不同参数之间取 **AND**。每个重复关键词、每个重复正则都必须匹配；正则中的 `|` 可表达 OR。
@@ -95,8 +128,8 @@ slog -I local-a -n 500 --json
 在仓库目录执行：
 
 ```sh
-go test -race ./tools/syslogger-log
-go vet ./tools/syslogger-log
+go test -race ./tools/mct-syslogger ./internal/catalog
+go vet ./tools/mct-syslogger ./internal/catalog
 ```
 
-测试使用内存日志和测试辅助进程，覆盖解析、过滤、数量限制、跟踪参数及收尾，不读取真实系统日志。
+测试使用内存日志、隔离目录和测试辅助进程，覆盖目录发布与读取、筛选和输出，以及日志解析、数量限制、跟踪参数及收尾，不读取真实系统日志。

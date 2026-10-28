@@ -97,7 +97,7 @@ func TestHelpLayout(t *testing.T) {
 			rows = append(rows, line)
 		}
 	}
-	if len(rows) != 13 {
+	if len(rows) != 14 {
 		t.Fatalf("每个功能应只显示一行帮助，实际为 %d 行：\n%s", len(rows), help.String())
 	}
 	want := []string{
@@ -113,6 +113,7 @@ func TestHelpLayout(t *testing.T) {
 		"-i, --ignore-case",
 		"-n, --lines",
 		"--json",
+		"--list",
 		"--colour",
 	}
 	for i, label := range want {

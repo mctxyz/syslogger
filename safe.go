@@ -14,6 +14,7 @@ import (
 func SafeNew(cfg Config) *Manager {
 	cfg, corrections := cfg.corrected()
 	m := newManager(cfg)
+	defer m.publishCatalog()
 	if err := m.registry.Register(m); err != nil {
 		// 共享表冲突属于初始化配置异常，独立注册表使完整管理器继续提供自身指标。
 		m.cfg.Registry = nil

@@ -110,7 +110,7 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 		_ = m.Close(ctx)
 		_ = m.Close(context.Background())
 	})
-	a, err := m.Register("saturated", 64)
+	a, err := m.Register(ComponentConfig{Name: "saturated", QueueCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -140,11 +140,11 @@ func TestModuleBackpressureIsolationAndBoundedClose(t *testing.T) {
 	cfg.SyslogSocketPath = path
 	cfg.File.Enabled = true
 	m := testManager(t, cfg)
-	a, err := m.Register("saturated", 64)
+	a, err := m.Register(ComponentConfig{Name: "saturated", QueueCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := m.Register("independent", 1)
+	b, err := m.Register(ComponentConfig{Name: "independent", QueueCapacity: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
