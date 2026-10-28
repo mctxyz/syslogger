@@ -126,6 +126,9 @@ func TestHelpLayout(t *testing.T) {
 			t.Fatalf("长短参数未合并为单条说明：%q", row)
 		}
 	}
+	if !strings.Contains(help.String(), "sudo usermod -aG systemd-journal username") {
+		t.Fatal("帮助信息缺少普通用户读取 journal 的权限配置示例")
+	}
 }
 
 func TestJournalArgs(t *testing.T) {

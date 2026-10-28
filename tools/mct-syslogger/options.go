@@ -106,6 +106,9 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 		}
 		writer.Flush()
 		fmt.Fprintln(help, "身份/等级同类取 OR，其他条件取 AND；普通查询默认最新 100 条，跟踪默认不限。")
+		fmt.Fprintln(help, "\n普通用户读取系统日志（示例用户 username）：")
+		fmt.Fprintln(help, "  sudo usermod -aG systemd-journal username")
+		fmt.Fprintln(help, "  将 username 替换为实际用户名，退出并重新登录后生效。")
 	}
 	if err := flags.Parse(args); err != nil {
 		return opts, err

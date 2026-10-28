@@ -27,6 +27,14 @@ install -m 755 /path/to/syslogger/tools/bin/mct-syslogger "$HOME/.local/bin/mct-
 
 需要提升 journal 读取权限时，在命令前使用 `sudo`，例如 `sudo /path/to/syslogger/tools/bin/mct-syslogger -I local-a`。工具只执行查询，不更改日志权限和留存配置。`tools/bin/` 是已忽略的本地构建目录。
 
+要让普通用户直接读取系统 journal，管理员可将其加入 `systemd-journal` 组（将 `username` 替换为实际用户名）：
+
+```sh
+sudo usermod -aG systemd-journal username
+```
+
+退出并重新登录后组权限生效。命令的 `--help` 同时提供这一配置示例。
+
 ## 查看项目、实例与组件目录
 
 业务开启 `Config.CatalogEnabled` 后，syslogger 向 `/tmp/mct-syslogger` 发布目录。`Config.InstanceDescription` 描述实例用途，组件通过 `Register(ComponentConfig)` 提供名称及 `Description`。目录开关默认关闭，与日志及指标出口独立。
