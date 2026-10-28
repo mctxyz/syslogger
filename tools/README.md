@@ -55,13 +55,17 @@ slog --list --json
 树形输出示例：
 
 ```text
-contract-listener
-└── mainnet-a  主网事件监听
-    ├── rpc  区块与日志获取
-    └── worker  事件处理
+mct-syslogger
+├── contract-listener
+│   └── mainnet-a  主网事件监听
+│       ├── rpc  区块与日志获取
+│       └── worker  事件处理
+└── other-project
+    └── main  后台任务服务
+        └── worker  任务处理
 ```
 
-目录按项目、实例和组件名称排序。`-p`、`-I`、`-c` 使用原文精确匹配，同类重复取 OR，不同条件取 AND；指定组件筛选后只显示匹配组件及其所属实例。`--json` 输出实例对象数组，其中包含 `project`、`instance_id`、`instance_description` 和 `components`。
+树形目录以 `mct-syslogger` 为统一展示根节点，其下依次为项目、实例和组件，并按名称排序。`-p`、`-I`、`-c` 使用原文精确匹配，同类重复取 OR，不同条件取 AND；指定组件筛选后只显示匹配组件及其所属实例。`--json` 继续输出实例对象数组，其中包含 `project`、`instance_id`、`instance_description` 和 `components`。
 
 目录查询直接读取固定路径，与各进程的 `TMPDIR` 无关，也可在未安装 `journalctl` 时使用。目录尚未创建或筛选无结果时正常返回空列表；JSON 格式错误和实际文件读取失败明确报错。目录模式只接受身份筛选、`--json` 和 `--colour`，日志时间、等级、内容、条数和跟踪参数用于日志查询模式。
 

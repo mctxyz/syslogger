@@ -41,9 +41,20 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(selected)
 	}
+	if len(selected) > 0 {
+		if _, err := fmt.Fprintln(output, "mct-syslogger"); err != nil {
+			return err
+		}
+	}
+	// 读取结果按项目排序，筛选保持原顺序，最后一条所属项目就是最后一个分组。
 	for index, instance := range selected {
+		projectBranch, projectPrefix := "├── ", "│   "
+		if instance.Project == selected[len(selected)-1].Project {
+			projectBranch, projectPrefix = "└── ", "    "
+		}
 		if index == 0 || selected[index-1].Project != instance.Project {
-			if _, err := fmt.Fprintln(output, catalogLabel(instance.Project, "", colourProject, opts.colour)); err != nil {
+			label := catalogLabel(instance.Project, "", colourProject, opts.colour)
+			if _, err := fmt.Fprintln(output, projectBranch+label); err != nil {
 				return err
 			}
 		}
@@ -52,7 +63,8 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 		if lastInstance {
 			branch, prefix = "└── ", "    "
 		}
-		if _, err := fmt.Fprintln(output, branch+catalogLabel(instance.InstanceID, instance.InstanceDescription, colourInstance, opts.colour)); err != nil {
+		label := catalogLabel(instance.InstanceID, instance.InstanceDescription, colourInstance, opts.colour)
+		if _, err := fmt.Fprintln(output, projectPrefix+branch+label); err != nil {
 			return err
 		}
 		for componentIndex, component := range instance.Components {
@@ -61,7 +73,7 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 				branch = "└── "
 			}
 			label := catalogLabel(component.Name, component.Description, colourComponent, opts.colour)
-			if _, err := fmt.Fprintln(output, prefix+branch+label); err != nil {
+			if _, err := fmt.Fprintln(output, projectPrefix+prefix+branch+label); err != nil {
 				return err
 			}
 		}

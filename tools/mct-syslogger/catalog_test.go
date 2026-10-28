@@ -50,9 +50,30 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	if err := showCatalog(store, testOptions(t, "--list"), &output); err != nil {
 		t.Fatal(err)
 	}
-	want := "a\n├── local  主网实例\n│   ├── rpc  区块获取\n│   └── worker  后台任务\n└── other\n    └── worker  后台任务\nb\n└── local  B 实例\n"
+	want := `mct-syslogger
+├── a
+│   ├── local  主网实例
+│   │   ├── rpc  区块获取
+│   │   └── worker  后台任务
+│   └── other
+│       └── worker  后台任务
+└── b
+    └── local  B 实例
+`
 	if output.String() != want {
 		t.Fatalf("目录树不符:\n%s", output.String())
+	}
+	output.Reset()
+	if err := showCatalog(store, testOptions(t, "--list", "-p", "a", "-I", "local", "-c", "rpc"), &output); err != nil {
+		t.Fatal(err)
+	}
+	want = `mct-syslogger
+└── a
+    └── local  主网实例
+        └── rpc  区块获取
+`
+	if output.String() != want {
+		t.Fatalf("单项目筛选后的目录树不符:\n%s", output.String())
 	}
 	for _, args := range [][]string{
 		{"--list", "-p", "a", "-I", "local", "-c", "rpc", "--json"},
@@ -70,6 +91,10 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	output.Reset()
 	if err := showCatalog(store, testOptions(t, "--list", "-c", "absent", "--json"), &output); err != nil || output.String() != "[]\n" {
 		t.Fatalf("无匹配组件时应返回空列表: %q, %v", output.String(), err)
+	}
+	output.Reset()
+	if err := showCatalog(store, testOptions(t, "--list", "-c", "absent"), &output); err != nil || output.Len() != 0 {
+		t.Fatalf("无匹配组件时应保持空输出: %q, %v", output.String(), err)
 	}
 }
 
