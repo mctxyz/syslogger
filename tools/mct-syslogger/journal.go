@@ -101,6 +101,9 @@ func (record logRecord) fieldsJSON() string {
 }
 
 func (opts options) matches(record logRecord) bool {
+	if contains(opts.excludedLevels, record.Level) {
+		return false
+	}
 	for _, condition := range []struct {
 		values []string
 		value  string

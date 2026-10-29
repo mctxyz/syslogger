@@ -132,7 +132,7 @@ rpc.Info("组件已注册", nil)
 ```sh
 go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
 ./tools/bin/mct-syslogger --list
-./tools/bin/mct-syslogger -p contract-listener -I local-a -c rpc --since=-2h -k '超时'
+./tools/bin/mct-syslogger -p contract-listener -i local-a -c rpc -s=-2h -k '超时'
 ```
 
 编译使用 Go 1.19+，运行环境为 Linux 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。

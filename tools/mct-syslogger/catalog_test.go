@@ -14,9 +14,12 @@ import (
 )
 
 func TestCatalogOptions(t *testing.T) {
-	opts := testOptions(t, "--list", "-p", "a", "-p", "b", "-I", "local", "-c", "rpc", "--json", "--colour")
+	opts := testOptions(t, "--list", "-p", "a", "-p", "b", "-i", "local", "-c", "rpc", "--json", "--colour")
 	if !opts.list || !opts.asJSON || !opts.colour || len(opts.projects) != 2 {
 		t.Fatal("目录参数没有生效")
+	}
+	if len(opts.instances) != 1 || opts.instances[0] != "local" {
+		t.Fatalf("目录模式的 -i 未作为实例筛选生效：%v", opts.instances)
 	}
 	for _, args := range [][]string{
 		{"--list", "-f"},
@@ -24,9 +27,10 @@ func TestCatalogOptions(t *testing.T) {
 		{"--list", "--until=now"},
 		{"--list", "-n", "0"},
 		{"--list", "-l", "error"},
+		{"--list", "--exclude-level", "debug"},
 		{"--list", "-k", "rpc"},
 		{"--list", "-e", "rpc"},
-		{"--list", "-i"},
+		{"--list", "--ignore-case"},
 	} {
 		if _, err := parseOptions(args, io.Discard); err == nil {
 			t.Fatalf("目录查询静默忽略了日志参数: %v", args)
@@ -64,7 +68,7 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 		t.Fatalf("目录树不符:\n%s", output.String())
 	}
 	output.Reset()
-	if err := showCatalog(store, testOptions(t, "--list", "-p", "a", "-I", "local", "-c", "rpc"), &output); err != nil {
+	if err := showCatalog(store, testOptions(t, "--list", "-p", "a", "-i", "local", "-c", "rpc"), &output); err != nil {
 		t.Fatal(err)
 	}
 	want = `mct-syslogger
@@ -76,8 +80,8 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 		t.Fatalf("单项目筛选后的目录树不符:\n%s", output.String())
 	}
 	for _, args := range [][]string{
-		{"--list", "-p", "a", "-I", "local", "-c", "rpc", "--json"},
-		{"--list", "-p", "missing", "-p", "a", "-I", "local", "-c", "rpc", "--json"},
+		{"--list", "-p", "a", "-i", "local", "-c", "rpc", "--json"},
+		{"--list", "-p", "missing", "-p", "a", "-i", "local", "-c", "rpc", "--json"},
 	} {
 		output.Reset()
 		if err := showCatalog(store, testOptions(t, args...), &output); err != nil {

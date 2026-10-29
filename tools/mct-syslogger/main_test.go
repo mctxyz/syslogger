@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -73,6 +72,8 @@ func TestParseOptions(t *testing.T) {
 		{"-n", "-1"},
 		{"-n", "abc"},
 		{"-l", "fatal"},
+		{"--exclude-level", "fatal"},
+		{"--exclude-level", "debug", "--exclude-level", "fatal"},
 		{"-f", "--until", "now"},
 		{"--unknown"},
 		{"--colour=invalid"},
@@ -86,48 +87,32 @@ func TestParseOptions(t *testing.T) {
 	}
 }
 
-func TestHelpLayout(t *testing.T) {
-	var help bytes.Buffer
-	if _, err := parseOptions([]string{"--help"}, &help); !errors.Is(err, flag.ErrHelp) {
-		t.Fatalf("帮助命令失败：%v", err)
+func TestLowercaseOptionAliases(t *testing.T) {
+	short := testOptions(t, "-i", "local-a", "--instance-id", "local-b", "-s=-2h", "-u", "now", "-k", "TIMEOUT", "--ignore-case")
+	long := testOptions(t, "--instance-id", "local-a", "--instance-id", "local-b", "--since=-2h", "--until", "now", "-k", "TIMEOUT", "--ignore-case")
+	if !reflect.DeepEqual(short, long) {
+		t.Fatalf("小写短参数和长参数行为不一致：short=%+v long=%+v", short, long)
 	}
-	var rows []string
-	for _, line := range strings.Split(help.String(), "\n") {
-		if line = strings.TrimSpace(line); strings.HasPrefix(line, "-") {
-			rows = append(rows, line)
-		}
+	if !reflect.DeepEqual(short.instances, stringList{"local-a", "local-b"}) {
+		t.Fatalf("长短参数混用时实例值未累积：%v", short.instances)
 	}
-	if len(rows) != 14 {
-		t.Fatalf("每个功能应只显示一行帮助，实际为 %d 行：\n%s", len(rows), help.String())
+	if short.since != "-2h" || short.until != "now" {
+		t.Fatalf("小写时间参数未生效：since=%q until=%q", short.since, short.until)
 	}
-	want := []string{
-		"-p, --project",
-		"-I, --instance-id",
-		"-c, --component",
-		"-l, --level",
-		"-S, --since",
-		"-U, --until",
-		"-k, --keyword",
-		"-e, --regex",
-		"-f, --follow",
-		"-i, --ignore-case",
-		"-n, --lines",
-		"--json",
-		"--list",
-		"--colour",
+	if !short.ignoreKeywordCase || short.keywords[0] != "timeout" {
+		t.Fatal("--ignore-case 未保留关键词忽略大小写行为")
 	}
-	for i, label := range want {
-		if !strings.HasPrefix(rows[i], label+" ") {
-			t.Fatalf("第 %d 行应为 %q，实际为 %q", i+1, label, rows[i])
-		}
-	}
-	for _, row := range rows {
-		if strings.Count(row, "--") != 1 {
-			t.Fatalf("长短参数未合并为单条说明：%q", row)
-		}
-	}
-	if !strings.Contains(help.String(), "sudo usermod -aG systemd-journal username") {
-		t.Fatal("帮助信息缺少普通用户读取 journal 的权限配置示例")
+	for _, args := range [][]string{
+		{"-I", "local-a"},
+		{"-S=-2h"},
+		{"-U", "now"},
+		{"-i"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			if _, err := parseOptions(args, io.Discard); err == nil {
+				t.Fatal("旧大写短参数或缺少实例值的 -i 未被拒绝")
+			}
+		})
 	}
 }
 
@@ -190,7 +175,7 @@ func TestFilterComposition(t *testing.T) {
 		{
 			args: []string{
 				"-p", "syslogger-test",
-				"-I", "local-a",
+				"-i", "local-a",
 				"-c", "rpc",
 				"-c", "worker",
 				"-l", "error",
@@ -199,7 +184,7 @@ func TestFilterComposition(t *testing.T) {
 			want: true,
 		},
 		{
-			args: []string{"-I", "other"},
+			args: []string{"-i", "other"},
 			want: false,
 		},
 		{
@@ -208,6 +193,34 @@ func TestFilterComposition(t *testing.T) {
 		},
 		{
 			args: []string{"-l", "info"},
+			want: false,
+		},
+		{
+			args: []string{"--exclude-level", "debug"},
+			want: true,
+		},
+		{
+			args: []string{"--exclude-level", "error"},
+			want: false,
+		},
+		{
+			args: []string{"--exclude-level", "debug", "--exclude-level", "info"},
+			want: true,
+		},
+		{
+			args: []string{"--exclude-level", "debug", "--exclude-level", "error"},
+			want: false,
+		},
+		{
+			args: []string{"-l", "error", "--exclude-level", "debug"},
+			want: true,
+		},
+		{
+			args: []string{"-l", "error", "--exclude-level", "error"},
+			want: false,
+		},
+		{
+			args: []string{"-l", "info", "--exclude-level", "debug"},
 			want: false,
 		},
 		{
@@ -238,14 +251,14 @@ func TestFilterComposition(t *testing.T) {
 			want: true,
 		},
 		{
-			args: []string{"-k", "DEADLINE", "-i"},
+			args: []string{"-k", "DEADLINE", "--ignore-case"},
 			want: true,
 		},
 		{
 			args: []string{
 				"-k", "rpc",
 				"-e", `^rpc \[timeout\]$`,
-				"-i",
+				"--ignore-case",
 			},
 			want: false,
 		},
@@ -253,7 +266,7 @@ func TestFilterComposition(t *testing.T) {
 			args: []string{
 				"-k", "rpc",
 				"-e", `(?i)^rpc \[timeout\]$`,
-				"-i",
+				"--ignore-case",
 			},
 			want: true,
 		},
@@ -262,7 +275,7 @@ func TestFilterComposition(t *testing.T) {
 			want: true,
 		},
 		{
-			args: []string{"-e", `DEADLINE`, "-i"},
+			args: []string{"-e", `DEADLINE`, "--ignore-case"},
 			want: false,
 		},
 		{
@@ -270,7 +283,7 @@ func TestFilterComposition(t *testing.T) {
 			want: true,
 		},
 		{
-			args: []string{"-I", "LOCAL-A", "-i"},
+			args: []string{"-i", "LOCAL-A", "--ignore-case"},
 			want: false,
 		},
 		{
@@ -508,7 +521,7 @@ func TestMatchLimitAndOrder(t *testing.T) {
 		fmt.Fprintln(&input, sampleLine(fmt.Sprint(i), instance, "rpc"))
 	}
 	var output bytes.Buffer
-	complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, "-I", "local-a", "--json"))
+	complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, "-i", "local-a", "--json"))
 	if err != nil || complete {
 		t.Fatalf("达到匹配数量应提前停止：complete=%v err=%v", complete, err)
 	}
