@@ -148,9 +148,9 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     自动化跟踪宜指定正数 -n；匹配不足时仍会等待，可由调用方设置执行时限。
 
 输出与退出码：
-  • 默认可读日志：UTC时间 等级 project/instance_id/component 消息 fields。
-    时间来自正文 timestamp，显示到秒；换行和控制字符转义为单行。
-    正文时间和 journal 收录时间可能因交付延迟而不同；JSON 保留原始时间精度。
+  • 默认可读日志：本地时间 等级 project/instance_id/component 消息 fields。
+    时间来自正文 timestamp，按运行设备的系统时区显示到秒；换行和控制字符转义为单行。
+    正文时间和 journal 收录时间可能因交付延迟而不同；JSON 保留原始时间及精度。
   • --json：日志每行一条原始 JSON 正文（NDJSON），保留业务字段，不含 journal 元数据。
     --list --json：实例对象数组，字段为 project、instance_id、instance_description、components；
     components 中每项含 name、description。空目录输出 []，可读空目录无文本。

@@ -147,7 +147,7 @@ slog -i local-a -n 500 --json
 - 最终等级集合为阈值范围与包含集合的交集，再移除任一 `--exclude-level` 指定的等级。未指定包含条件时，包含范围不限；例如 `--level warning --include-level info --include-level error` 仅显示 `error`，`--include-level error --exclude-level error` 得到空结果。数量上限在全部等级筛选及其他过滤之后执行。
 - 关键词和正则分别搜索 `message` 原文及 `fields` 的 JSON 表示（含字段名、嵌套内容）。每项可以在其中任一处匹配；身份与时间不参与搜索。
 - 正则使用 [Go regexp 语法](https://pkg.go.dev/regexp/syntax)（RE2），支持分组、字符类及 `|`，不支持前后向断言和反向引用；大小写规则由表达式控制，例如 `(?i)timeout` 表示忽略大小写匹配，`(?i:timeout)` 只作用于该分组。
-- 时间范围使用 **journal 收录时间**，由 journalctl 解释；未带时区的绝对时间按设备本地时区解释。可读输出使用正文中的 UTC `timestamp`，格式为 `YYYY-MM-DD HH:MM:SS`，截去秒以下精度；`--json` 保留原始时间。收录时间与正文时间可能因交付延迟而不同。
+- 时间范围使用 **journal 收录时间**，由 journalctl 解释；未带时区的绝对时间按设备本地时区解释。可读输出将正文中的 `timestamp` 转换为运行设备的系统时区，格式为 `YYYY-MM-DD HH:MM:SS`，截去秒以下精度；`--json` 保留原始时间。收录时间与正文时间可能因交付延迟而不同。
 - 普通查询默认取最新 100 条匹配日志，再按 journal 从旧到新显示；`-n 0` 流式显示范围内全部匹配日志。数量限制在所有过滤之后执行。
 - 跟踪默认输出起始时间以来的全部匹配历史并继续读取新日志，条数不限；只看新日志时用 `--since now -f`。`--until` 用于固定范围查询，与 `--follow` 分别使用。
 - 自动化跟踪宜显式指定正数 `-n`；匹配不足时仍会持续等待，调用方可另设执行时限。查询较早的事件时，同时扩大 `-s`，因为 `-n 0` 只改变条数上限。

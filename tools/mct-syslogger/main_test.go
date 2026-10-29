@@ -476,28 +476,70 @@ func TestFilterLogsColour(t *testing.T) {
 }
 
 func TestReadableTimestamp(t *testing.T) {
+	east := time.FixedZone("test-east", 8*60*60)
+	west := time.FixedZone("test-west", -5*60*60)
 	for _, test := range []struct {
+		name      string
+		location  *time.Location
 		timestamp string
 		want      string
 	}{
 		{
+			name:      "utc-fractional",
+			location:  time.UTC,
 			timestamp: "2026-10-23T09:00:00.987654321Z",
 			want:      "2026-10-23 09:00:00",
 		},
 		{
-			timestamp: "2026-10-23T09:00:00Z",
-			want:      "2026-10-23 09:00:00",
+			name:      "local-fractional",
+			location:  east,
+			timestamp: "2026-10-23T09:00:00.987654321Z",
+			want:      "2026-10-23 17:00:00",
 		},
 		{
+			name:      "local-whole-second",
+			location:  east,
+			timestamp: "2026-10-23T09:00:00Z",
+			want:      "2026-10-23 17:00:00",
+		},
+		{
+			name:      "utc-from-offset",
+			location:  time.UTC,
 			timestamp: "2026-10-23T01:00:00.123+08:00",
 			want:      "2026-10-22 17:00:00",
 		},
 		{
+			name:      "local-from-offset",
+			location:  east,
+			timestamp: "2026-10-23T01:00:00.123+08:00",
+			want:      "2026-10-23 01:00:00",
+		},
+		{
+			name:      "reported-local-time",
+			location:  east,
+			timestamp: "2026-10-29T02:59:24Z",
+			want:      "2026-10-29 10:59:24",
+		},
+		{
+			name:      "negative-offset-crosses-date",
+			location:  west,
+			timestamp: "2026-10-29T02:59:24Z",
+			want:      "2026-10-28 21:59:24",
+		},
+		{
+			name:      "invalid",
+			location:  east,
 			timestamp: "invalid\ntime",
 			want:      `invalid\ntime`,
 		},
 	} {
-		t.Run(test.timestamp, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
+			// 固定测试进程的本地时区，避免依赖开发设备配置，结束后恢复。
+			original := time.Local
+			time.Local = test.location
+			t.Cleanup(func() {
+				time.Local = original
+			})
 			line := strings.Replace(
 				sampleLine("message", "local-a", "rpc"),
 				`"timestamp":"2026-10-23T09:00:00.123456789Z"`,

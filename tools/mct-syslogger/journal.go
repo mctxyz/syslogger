@@ -162,10 +162,10 @@ func (record logRecord) format(asJSON bool, colour bool) string {
 	if asJSON {
 		return record.raw
 	}
-	// 可读时间统一按 UTC 显示到秒，无法解析时保留转义后的原文供排查。
+	// 可读时间按运行设备的系统时区显示到秒，无法解析时保留转义后的原文供排查。
 	timestamp := escaped(record.Timestamp)
 	if at, err := time.Parse(time.RFC3339Nano, record.Timestamp); err == nil {
-		timestamp = at.UTC().Format("2006-01-02 15:04:05")
+		timestamp = at.Local().Format("2006-01-02 15:04:05")
 	}
 	// 等级先按可见字符补齐宽度，再添加 ANSI 样式，保持各行列对齐。
 	level := fmt.Sprintf("%-9s", strings.ToUpper(escaped(record.Level)))
