@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// levels 与库输出的八级日志正文名称一致。
+// levels 按严重程度从高到低排列，对应 SDK 的 severity 0～7，顺序用于解析查询阈值。
 var levels = []string{
 	"emergency",
 	"alert",
@@ -101,7 +101,7 @@ func (record logRecord) fieldsJSON() string {
 }
 
 func (opts options) matches(record logRecord) bool {
-	if contains(opts.excludedLevels, record.Level) {
+	if !contains(opts.levels, record.Level) {
 		return false
 	}
 	for _, condition := range []struct {
@@ -119,10 +119,6 @@ func (opts options) matches(record logRecord) bool {
 		{
 			values: opts.components,
 			value:  record.Component,
-		},
-		{
-			values: opts.levels,
-			value:  record.Level,
 		},
 	} {
 		if len(condition.values) > 0 && !contains(condition.values, condition.value) {

@@ -34,6 +34,7 @@ func TestHelpLayout(t *testing.T) {
 		"-i, --instance-id INSTANCE",
 		"-c, --component COMPONENT",
 		"-l, --level LEVEL",
+		"--include-level LEVEL",
 		"--exclude-level LEVEL",
 		"-s, --since TIME",
 		"-u, --until TIME",

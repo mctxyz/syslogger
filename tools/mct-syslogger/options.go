@@ -22,13 +22,13 @@ func (values *stringList) Set(value string) error {
 	return nil
 }
 
-// options 保存命令行条件，正则在启动 journalctl 前统一编译。
+// options 保存解析后的查询条件，正则在启动 journalctl 前统一编译。
+// levels 是阈值、包含和排除条件合并后的有效集合，空集合表示无匹配。
 type options struct {
 	projects          stringList
 	instances         stringList
 	components        stringList
 	levels            stringList
-	excludedLevels    stringList
 	keywords          stringList
 	patterns          []*regexp.Regexp
 	since             string
@@ -43,14 +43,16 @@ type options struct {
 
 func parseOptions(args []string, help io.Writer) (options, error) {
 	var opts options
-	var patterns stringList
+	var level string
+	var includedLevels, excludedLevels, patterns stringList
 	flags := flag.NewFlagSet("mct-syslogger", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Var(&opts.projects, "project", "精确匹配项目名 `PROJECT`（JSON project）；可重复（OR）")
 	flags.Var(&opts.instances, "instance-id", "精确匹配实例名 `INSTANCE`（JSON instance_id）；可重复（OR）")
 	flags.Var(&opts.components, "component", "精确匹配组件名 `COMPONENT`（JSON component）；可重复（OR）")
-	flags.Var(&opts.levels, "level", "仅保留指定等级 `LEVEL`；可重复（OR），按名称精确匹配")
-	flags.Var(&opts.excludedLevels, "exclude-level", "排除指定等级 `LEVEL`；可重复，排除条件优先")
+	flags.StringVar(&level, "level", "debug", "显示 `LEVEL` 及更严重等级；debug 为全部，重复时最后一个生效")
+	flags.Var(&includedLevels, "include-level", "仅保留指定等级 `LEVEL`；可重复（OR），与阈值取交集")
+	flags.Var(&excludedLevels, "exclude-level", "排除指定等级 `LEVEL`；可重复，排除条件优先")
 	flags.Var(&opts.keywords, "keyword", "搜索字面关键词 `TEXT`；默认区分大小写，可重复（AND）")
 	flags.Var(&patterns, "regex", "搜索 Go 正则 `REGEX`；可重复（AND），用 (?i) 忽略大小写")
 	flags.StringVar(&opts.since, "since", "-1h", "journal 起始时间 `TIME`；如 -2h、today、now 或带时区的绝对时间")
@@ -106,11 +108,21 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	if opts.follow && !linesSet {
 		opts.lines = 0
 	}
-	for _, selected := range []stringList{opts.levels, opts.excludedLevels} {
-		for _, level := range selected {
-			if !contains(levels, level) {
-				return opts, fmt.Errorf("未知日志等级 %q，可选：%s", level, strings.Join(levels, ", "))
+	for _, selected := range []stringList{{level}, includedLevels, excludedLevels} {
+		for _, name := range selected {
+			if !contains(levels, name) {
+				return opts, fmt.Errorf("未知日志等级 %q，可选：%s", name, strings.Join(levels, ", "))
 			}
+		}
+	}
+	// 等级表按严重程度从高到低排列，收集到阈值为止，再由正反选限定实际集合。
+	for _, candidate := range levels {
+		included := len(includedLevels) == 0 || contains(includedLevels, candidate)
+		if included && !contains(excludedLevels, candidate) {
+			opts.levels = append(opts.levels, candidate)
+		}
+		if candidate == level {
+			break
 		}
 	}
 	for _, pattern := range patterns {

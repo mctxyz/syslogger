@@ -93,12 +93,18 @@ slog -i local-a -k timeout -k retry --ignore-case
 # Go 正则：匹配任一错误描述，忽略大小写。
 slog -c rpc -e '(?i)(timeout|connection refused)'
 
-# 同时查看多个模块和多个等级。
-slog -i local-a -c rpc -c worker -l error -l critical
+# 查看 info 及更严重的日志；debug 阈值表示全部等级。
+slog -i local-a -l info
+
+# 同时查看多个模块，精确选择 error 和 critical 两个等级。
+slog -i local-a -c rpc -c worker --include-level error --include-level critical
 
 # 排除 debug，或同时排除多个等级。
 slog -i local-a --exclude-level debug
 slog -i local-a --exclude-level debug --exclude-level info
+
+# 组合阈值、精确包含和排除，最终仅显示 error。
+slog -i local-a -l warning --include-level error --include-level critical --exclude-level critical
 
 # 按日志等级及项目、实例、模块、消息、业务字段分色显示。
 slog -i local-a --colour
@@ -120,7 +126,8 @@ slog -i local-a -n 500 --json
 | `-p / --project PROJECT` | JSON `project` 原文精确匹配，可重复（OR） |
 | `-i / --instance-id INSTANCE` | JSON `instance_id` 原文精确匹配，可重复（OR） |
 | `-c / --component COMPONENT` | JSON `component` 原文精确匹配，可重复（OR） |
-| `-l / --level LEVEL` | 等级精确匹配，可重复（OR）：`emergency`、`alert`、`critical`、`error`、`warning`、`notice`、`info`、`debug` |
+| `-l / --level LEVEL` | 最低严重程度阈值，显示该等级及更严重等级；默认 `debug`（全部等级），重复时最后一个生效 |
+| `--include-level LEVEL` | 按等级名称精确包含，可重复（OR）；与 `--level` 的阈值范围取交集 |
 | `--exclude-level LEVEL` | 排除指定等级，可重复；可选等级与 `--level` 相同 |
 | `-s / --since TIME` | 起始时间，默认 `-1h`，支持 journalctl 的相对时间、`today`、`now` 和绝对时间 |
 | `-u / --until TIME` | 结束时间，默认无结束限制；与 `--follow` 互斥 |
@@ -135,8 +142,9 @@ slog -i local-a -n 500 --json
 | `-h / --help` | 显示完整帮助并退出 |
 
 - 表中大写名称为值占位符，实际使用时替换为一个参数值。含空格或正则的值用引号包裹，如 `-s '2026-10-23 09:00:00 UTC'`、`-e '(?i)timeout'`；以 `-` 开头的时间值建议使用 `-s=-2h`。布尔参数直接开启或用 `--colour=false` 显式关闭，所有输入均通过参数传入。
-- 同一个身份或等级参数重复时取 **OR**，不同参数之间取 **AND**。每个重复关键词、每个重复正则都必须匹配；正则中的 `|` 可表达 OR。
-- 多个 `--exclude-level` 排除其中任一等级的记录；与 `--level` 同时使用时，从包含范围中再排除指定等级。数量上限在等级排除及其他过滤之后执行。
+- 等级严重程度从高到低为：`emergency`、`alert`、`critical`、`error`、`warning`、`notice`、`info`、`debug`，参数使用小写名称。`--level info` 显示除 `debug` 外的七个等级；`--level warning` 显示 `warning`、`error`、`critical`、`alert`、`emergency`。`--level` 与 `-l` 共用一个阈值，重复时最后一个生效。
+- 同一个身份参数或 `--include-level` 重复时取 **OR**，不同筛选条件之间取 **AND**。每个重复关键词、每个重复正则都必须匹配；正则中的 `|` 可表达 OR。
+- 最终等级集合为阈值范围与包含集合的交集，再移除任一 `--exclude-level` 指定的等级。未指定包含条件时，包含范围不限；例如 `--level warning --include-level info --include-level error` 仅显示 `error`，`--include-level error --exclude-level error` 得到空结果。数量上限在全部等级筛选及其他过滤之后执行。
 - 关键词和正则分别搜索 `message` 原文及 `fields` 的 JSON 表示（含字段名、嵌套内容）。每项可以在其中任一处匹配；身份与时间不参与搜索。
 - 正则使用 [Go regexp 语法](https://pkg.go.dev/regexp/syntax)（RE2），支持分组、字符类及 `|`，不支持前后向断言和反向引用；大小写规则由表达式控制，例如 `(?i)timeout` 表示忽略大小写匹配，`(?i:timeout)` 只作用于该分组。
 - 时间范围使用 **journal 收录时间**，由 journalctl 解释；未带时区的绝对时间按设备本地时区解释。可读输出使用正文中的 UTC `timestamp`，格式为 `YYYY-MM-DD HH:MM:SS`，截去秒以下精度；`--json` 保留原始时间。收录时间与正文时间可能因交付延迟而不同。

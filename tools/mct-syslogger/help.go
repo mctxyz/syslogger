@@ -36,6 +36,7 @@ var optionGroups = []struct {
 		title: "日志等级（仅日志查询）",
 		names: []optionName{
 			{long: "level", short: "l"},
+			{long: "include-level"},
 			{long: "exclude-level"},
 		},
 	},
@@ -111,19 +112,23 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "  -h, --help\t显示完整帮助并退出")
 	writer.Flush()
 
-	fmt.Fprintln(output, "\n可用等级（使用小写名称，按名称精确匹配）：")
+	fmt.Fprintln(output, "\n可用等级（严重程度从高到低，使用小写名称）：")
 	fmt.Fprintln(output, "  "+strings.Join(levels, ", "))
 	fmt.Fprint(output, `
 参数与组合规则：
   • 带大写占位符的参数需要一个值，如 -i local-a、--since=-2h。
     含空格、正则或特殊字符的值请加引号；布尔参数支持 =true / =false，如 --colour=false。
     所有输入均通过参数传入，位置参数会报错。
-  • project / instance_id / component 和等级均精确匹配、区分大小写。
-    未指定身份或包含等级时，该项不限；身份使用目录中的名称原文。
-  • 同类身份和 --level 重复取 OR，不同筛选条件取 AND。
-    例如 -c rpc -c worker -l error 表示 (rpc 或 worker) 且 error。
-  • --exclude-level 排除任一指定等级；与 --level 同用时从包含集合中排除。
-    例如 -l error --exclude-level error 将得到空结果。所有筛选均先于条数计数。
+  • project / instance_id / component 精确匹配、区分大小写，使用目录中的名称原文。
+    同类身份重复取 OR，不同筛选条件取 AND；未指定某项身份时，该项不限。
+  • -l / --level 指定单一严重程度阈值，显示该等级及更严重等级；等级名使用小写。
+    -l info 显示 info、notice、warning、error、critical、alert、emergency；-l debug 显示全部。
+    默认 debug；重复指定 --level 或 -l 时，以最后一个值为准。
+  • --include-level 按等级名称精确包含，可重复（OR）；未指定时，包含范围不限。
+    例如 -c rpc -c worker --include-level error 表示 (rpc 或 worker) 且等级为 error。
+  • 最终等级集合 = 阈值范围 ∩ 包含集合，再移除任一 --exclude-level 指定的等级。
+    例如 -l warning --include-level info --include-level error 仅显示 error。
+    --include-level error --exclude-level error 得到空结果；所有筛选均先于条数计数。
   • 每个 -k 和每个 -e 都必须匹配；单项可在 message 或 fields JSON 任一处命中。
     fields 搜索包含字段名及嵌套内容；身份、时间、目录描述不参与内容搜索。
     --ignore-case 只影响 -k；正则用 (?i) 忽略大小写、用 | 表达 OR。
@@ -163,8 +168,9 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   查询一个实例的 RPC 组件，最近两小时最新 200 条：
     mct-syslogger -p contract-listener -i local-a -c rpc -s=-2h -n 200
 
-  查看 error 或 critical；或排除 debug：
-    mct-syslogger -i local-a -l error -l critical
+  查看 info 及更严重等级；或精确选择 error、critical；或排除 debug：
+    mct-syslogger -i local-a -l info
+    mct-syslogger -i local-a --include-level error --include-level critical
     mct-syslogger -i local-a --exclude-level debug
 
   消息或业务字段必须同时包含 timeout 和 retry，关键词忽略大小写：

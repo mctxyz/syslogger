@@ -72,6 +72,13 @@ func TestParseOptions(t *testing.T) {
 		{"-n", "-1"},
 		{"-n", "abc"},
 		{"-l", "fatal"},
+		{"--level", "INFO"},
+		{"--level="},
+		{"--level"},
+		{"--include-level", "fatal"},
+		{"--include-level", "error", "--include-level", "fatal"},
+		{"--include-level="},
+		{"--include-level"},
 		{"--exclude-level", "fatal"},
 		{"--exclude-level", "debug", "--exclude-level", "fatal"},
 		{"-f", "--until", "now"},
@@ -178,8 +185,8 @@ func TestFilterComposition(t *testing.T) {
 				"-i", "local-a",
 				"-c", "rpc",
 				"-c", "worker",
-				"-l", "error",
-				"-l", "critical",
+				"--include-level", "error",
+				"--include-level", "critical",
 			},
 			want: true,
 		},
@@ -192,7 +199,7 @@ func TestFilterComposition(t *testing.T) {
 			want: false,
 		},
 		{
-			args: []string{"-l", "info"},
+			args: []string{"--include-level", "info"},
 			want: false,
 		},
 		{
@@ -212,15 +219,15 @@ func TestFilterComposition(t *testing.T) {
 			want: false,
 		},
 		{
-			args: []string{"-l", "error", "--exclude-level", "debug"},
+			args: []string{"--include-level", "error", "--exclude-level", "debug"},
 			want: true,
 		},
 		{
-			args: []string{"-l", "error", "--exclude-level", "error"},
+			args: []string{"--include-level", "error", "--exclude-level", "error"},
 			want: false,
 		},
 		{
-			args: []string{"-l", "info", "--exclude-level", "debug"},
+			args: []string{"--include-level", "info", "--exclude-level", "debug"},
 			want: false,
 		},
 		{

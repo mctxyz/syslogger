@@ -27,6 +27,8 @@ func TestCatalogOptions(t *testing.T) {
 		{"--list", "--until=now"},
 		{"--list", "-n", "0"},
 		{"--list", "-l", "error"},
+		{"--list", "--level", "debug"},
+		{"--list", "--include-level", "error"},
 		{"--list", "--exclude-level", "debug"},
 		{"--list", "-k", "rpc"},
 		{"--list", "-e", "rpc"},
