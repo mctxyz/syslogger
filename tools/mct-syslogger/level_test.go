@@ -20,7 +20,7 @@ func TestLevelThreshold(t *testing.T) {
 				for severity, level := range severityOrder {
 					record.Level = level
 					want := severity >= minimum
-					if got := opts.matches(record); got != want {
+					if got := recordMatches(t, opts, &record); got != want {
 						t.Fatalf("阈值 %s 匹配 %s：got=%v want=%v", threshold, level, got, want)
 					}
 				}
@@ -105,7 +105,7 @@ func TestLevelComposition(t *testing.T) {
 			var got []string
 			for _, level := range levels {
 				record.Level = level
-				if opts.matches(record) {
+				if recordMatches(t, opts, &record) {
 					got = append(got, level)
 				}
 			}

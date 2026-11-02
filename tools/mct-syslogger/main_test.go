@@ -45,6 +45,33 @@ func testOptions(t *testing.T, args ...string) options {
 	return opts
 }
 
+func recordMatches(t *testing.T, opts options, record *logRecord) bool {
+	t.Helper()
+	matched, err := opts.matches(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matched
+}
+
+func recordText(t *testing.T, record *logRecord, asJSON, colour bool) string {
+	t.Helper()
+	text, err := record.format(asJSON, colour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
+}
+
+func recordFields(t *testing.T, record *logRecord) string {
+	t.Helper()
+	text, err := record.fieldsJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
+}
+
 func TestParseOptions(t *testing.T) {
 	if opts := testOptions(t); opts.since != "-1h" || opts.lines != 100 || opts.follow || opts.colour {
 		t.Fatalf("默认查询选项错误：%+v", opts)
@@ -309,7 +336,7 @@ func TestFilterComposition(t *testing.T) {
 		},
 	} {
 		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
-			if got := testOptions(t, test.args...).matches(record); got != test.want {
+			if got := recordMatches(t, testOptions(t, test.args...), &record); got != test.want {
 				t.Fatalf("过滤结果为 %v，期望 %v", got, test.want)
 			}
 		})
@@ -320,13 +347,13 @@ func TestFieldsAndOutputPreserveContent(t *testing.T) {
 	line := sampleLine("消息\nnext\t\x1b[31m", "local-a", "rpc")
 	line = strings.Replace(line, `"attempt":3`, `"attempt":9007199254740993,"nested":{"detail":"请求\u0026失败"}`, 1)
 	record, valid := parseRecord([]byte(line))
-	if !valid || !testOptions(t, "-k", "9007199254740993", "-k", "请求&失败").matches(record) {
+	if !valid || !recordMatches(t, testOptions(t, "-k", "9007199254740993", "-k", "请求&失败"), &record) {
 		t.Fatal("业务字段解码丢失数字精度或转义内容")
 	}
-	if got := record.format(true, false); got != line {
+	if got := recordText(t, &record, true, false); got != line {
 		t.Fatalf("JSON 输出改变了正文：%s", got)
 	}
-	text := record.format(false, false)
+	text := recordText(t, &record, false, false)
 	if strings.ContainsAny(text, "\n\t\x1b") || !strings.Contains(text, "9007199254740993") || !strings.Contains(text, "消息") {
 		t.Fatalf("可读输出未保持单行及字段内容：%q", text)
 	}
@@ -352,8 +379,8 @@ func TestColourFormatting(t *testing.T) {
 				t.Fatalf("等级 %s 缺少独立颜色样式", level)
 			}
 			seenLevelStyles[style] = true
-			plain := record.format(false, false)
-			coloured := record.format(false, true)
+			plain := recordText(t, &record, false, false)
+			coloured := recordText(t, &record, false, true)
 			if ansi.MatchString(plain) {
 				t.Fatal("默认输出中出现 ANSI 颜色")
 			}
@@ -387,7 +414,7 @@ func TestColourFormatting(t *testing.T) {
 				},
 				{
 					style: colourFields,
-					text:  record.fieldsJSON(),
+					text:  recordFields(t, &record),
 				},
 			} {
 				if field.style == "" || seenFieldStyles[field.style] {
@@ -398,7 +425,7 @@ func TestColourFormatting(t *testing.T) {
 					t.Fatalf("字段 %q 未独立着色或复位", field.text)
 				}
 			}
-			if got := record.format(true, true); got != line {
+			if got := recordText(t, &record, true, true); got != line {
 				t.Fatalf("颜色开关改变了 JSON 正文：%s", got)
 			}
 		})
@@ -406,17 +433,17 @@ func TestColourFormatting(t *testing.T) {
 }
 
 func TestColourWithoutFields(t *testing.T) {
-	record, valid := parseRecord([]byte(sampleLine("", "local-a", "rpc")))
+	line := strings.Replace(sampleLine("", "local-a", "rpc"), `"fields":{"attempt":3,"error":"context deadline exceeded"}`, `"fields":null`, 1)
+	record, valid := parseRecord([]byte(line))
 	if !valid {
 		t.Fatal("日志解析失败")
 	}
-	record.Fields = nil
-	coloured := record.format(false, true)
+	coloured := recordText(t, &record, false, true)
 	if strings.Contains(coloured, colourFields) {
 		t.Fatal("空业务字段出现了颜色片段")
 	}
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]+m`)
-	if got := ansi.ReplaceAllString(coloured, ""); got != record.format(false, false) {
+	if got := ansi.ReplaceAllString(coloured, ""); got != recordText(t, &record, false, false) {
 		t.Fatal("空消息或空业务字段着色改变了文本布局")
 	}
 }
@@ -550,10 +577,10 @@ func TestReadableTimestamp(t *testing.T) {
 			if !valid {
 				t.Fatal("日志解析失败")
 			}
-			if got := record.format(false, false); !strings.HasPrefix(got, test.want+" ERROR") {
+			if got := recordText(t, &record, false, false); !strings.HasPrefix(got, test.want+" ERROR") {
 				t.Fatalf("可读时间格式错误：%q", got)
 			}
-			if got := record.format(true, false); got != line {
+			if got := recordText(t, &record, true, false); got != line {
 				t.Fatalf("JSON 输出改变了原始时间：%s", got)
 			}
 		})

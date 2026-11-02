@@ -1,10 +1,10 @@
 # 日志检索工具
 
-`mct-syslogger` 提供本机日志名称目录和日志检索。目录查询读取共享 JSON，日志检索通过 Go 标准库调用本机 `journalctl`，解析 syslogger 正文并过滤。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示和 journal 查询按职责分文件组织。编译后只需分发一个二进制；日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
+`mct-syslogger` 提供本机日志名称目录和日志检索。目录查询读取共享 JSON，日志检索通过 Go 标准库调用本机 `journalctl`，使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析 syslogger 正文并过滤。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
 
 ## 运行与快捷命令
 
-在仓库目录使用 Go 1.19+ 编译并运行：
+在仓库目录使用 Go 1.23+ 编译并运行；当前验证工具链为 Go 1.23.12：
 
 ```sh
 go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
@@ -152,6 +152,8 @@ slog -i local-a -n 500 --json
 - 跟踪默认输出起始时间以来的全部匹配历史并继续读取新日志，条数不限；只看新日志时用 `--since now -f`。`--until` 用于固定范围查询，与 `--follow` 分别使用。
 - 自动化跟踪宜显式指定正数 `-n`；匹配不足时仍会持续等待，调用方可另设执行时限。查询较早的事件时，同时扩大 `-s`，因为 `-n 0` 只改变条数上限。
 - 身份按 JSON 原文筛选，不依赖规范化后的 syslog tag。日志量较大时缩小时间范围可减少扫描；工具只展示结构符合 syslogger 格式的 JSON 正文。
+- 查询先一次提取基础字段并组合判断项目、实例、组件和等级，再逐项检查 message；内容条件需要访问 fields 或可读输出需要显示它时，才展开业务字段。fields 的规范化 JSON 至多编码一次，供全部内容条件和显示复用；`--json` 保留原文，message 已满足全部内容条件时可跳过 fields 展开。整行语法和字段类型在输出与计数前校验，数字精度、字段键排序和转义规则保持一致。
+- 多级处理减少解析、对象分配和编码开销；journalctl 仍按时间范围读取，实际总耗时也受 journal 扫描与 I/O 影响。Go 1.23 已退出官方常规支持窗口，部署方需关注工具链安全维护。
 - 可读输出包含时间、等级、`project/instance_id/component`、消息及业务字段，换行和控制字符转义为单行。JSON 输出每行一条记录，不包含 journal 外层元数据。
 - 彩色输出中，`project` 使用紫色、`instance_id` 使用蓝色、`component` 使用青色、`message` 使用绿色、`fields` 使用黄色；时间及分隔符保留终端默认色。等级配色为：`emergency` 红底加粗白字、`alert` 加粗亮紫、`critical` 亮红、`error` 红、`warning` 黄、`notice` 青、`info` 绿、`debug` 灰。
 - `--colour` 输出 ANSI 转义序列，适用于支持 ANSI 颜色的终端，重定向时也保留颜色序列。纯文本输出使用默认设置或 `--colour=false`；`--json` 始终保留原始 JSON 正文。
@@ -165,6 +167,7 @@ slog -i local-a -n 500 --json
 ```sh
 go test -race ./tools/mct-syslogger ./internal/catalog
 go vet ./tools/mct-syslogger ./internal/catalog
+GOTOOLCHAIN=go1.23.12 go test -run '^$' -bench '^(BenchmarkQueryRecord|BenchmarkFilterLogs)$' -benchmem ./tools/mct-syslogger
 ```
 
-测试使用内存日志、隔离目录和测试辅助进程，覆盖目录发布与读取、筛选和输出，以及日志解析、数量限制、跟踪参数及收尾，不读取真实系统日志。
+测试使用内存日志、隔离目录和测试辅助进程，覆盖目录发布与读取、筛选和输出，以及日志解析、数量限制、跟踪参数及收尾，不读取真实系统日志。JSON 差分测试和 fuzz 使用优化前标准库实现作为对照，覆盖重复键合并、空值、非法内容、精度、转义、按需展开及缓存所有权；基准分别测量单条 CPU 路径和含行读取、缓存反转、写入的完整过滤路径。

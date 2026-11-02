@@ -9,6 +9,27 @@ import (
 	"strings"
 )
 
+// levels 按严重程度从高到低排列，对应 SDK 的 severity 0～7，顺序用于解析查询阈值。
+var levels = []string{
+	"emergency",
+	"alert",
+	"critical",
+	"error",
+	"warning",
+	"notice",
+	"info",
+	"debug",
+}
+
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
 type stringList []string
 
 // String 提供 flag 帮助信息中的默认值表示。

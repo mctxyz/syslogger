@@ -1,6 +1,6 @@
 # syslogger
 
-Go 1.19 本机 syslog 日志与组件健康状态库，指标注册和导出使用 Prometheus 官方客户端。module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`。
+Go 1.23 本机 syslog 日志与组件健康状态库，指标注册和导出使用 Prometheus 官方客户端。module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`。
 
 ```text
 日志 → 模块独立 FIFO → 本机 syslog → 设备保存、轮转、转发
@@ -135,7 +135,7 @@ go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
 ./tools/bin/mct-syslogger -p contract-listener -i local-a -c rpc -s=-2h -k '超时'
 ```
 
-编译使用 Go 1.19+，运行环境为 Linux 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。
+编译使用 Go 1.23+，运行环境为 Linux 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。
 
 ### 本机日志名称目录
 
