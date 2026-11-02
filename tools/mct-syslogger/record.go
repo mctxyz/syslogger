@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"time"
 	"unicode"
 
 	json "github.com/goccy/go-json"
@@ -19,6 +20,7 @@ type logRecord struct {
 	Fields     struct{} `json:"fields"`
 	line       []byte
 	fieldsText *string
+	stats      *queryStats
 }
 
 func parseRecord(line []byte) (logRecord, bool) {
@@ -51,12 +53,28 @@ func (record *logRecord) fieldsJSON() (string, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(record.line))
 	decoder.UseNumber()
-	if err := decoder.Decode(&content); err != nil {
-		return "", err
+	var phase time.Time
+	if record.stats != nil {
+		record.stats.fieldsDecodes++
+		phase = time.Now()
+	}
+	decodeErr := decoder.Decode(&content)
+	if record.stats != nil {
+		record.stats.fieldsDecode += time.Since(phase)
+	}
+	if decodeErr != nil {
+		return "", decodeErr
 	}
 	text := ""
 	if len(content.Fields) > 0 {
+		if record.stats != nil {
+			record.stats.fieldsEncodes++
+			phase = time.Now()
+		}
 		encoded, err := json.MarshalWithOption(content.Fields, json.DisableHTMLEscape())
+		if record.stats != nil {
+			record.stats.fieldsEncode += time.Since(phase)
+		}
 		if err != nil {
 			return "", err
 		}

@@ -256,7 +256,7 @@ func TestFilterLogsParityAndOwnership(t *testing.T) {
 			opts := testOptions(t, append([]string{"-p", "syslogger-test"}, args...)...)
 			var want, got bytes.Buffer
 			wantComplete, wantErr := referenceFilterLogs(bytes.NewReader(data), &want, opts)
-			complete, err := filterLogs(iotest.HalfReader(bytes.NewReader(data)), &got, opts)
+			complete, err := filterLogs(iotest.HalfReader(bytes.NewReader(data)), &got, opts, nil)
 			if err != nil || wantErr != nil || complete != wantComplete || got.String() != want.String() {
 				t.Fatalf("读取、缓存顺序或输出不同：complete=%v/%v err=%v/%v", complete, wantComplete, err, wantErr)
 			}

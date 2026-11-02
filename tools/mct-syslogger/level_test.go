@@ -179,7 +179,7 @@ func TestLevelFiltersBeforeLimit(t *testing.T) {
 					args = append(args, "-f")
 				}
 				var output bytes.Buffer
-				complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, args...))
+				complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, args...), nil)
 				if err != nil || complete {
 					t.Fatalf("达到匹配上限时应提前停止: complete=%v err=%v", complete, err)
 				}

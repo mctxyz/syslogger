@@ -58,6 +58,10 @@ var optionGroups = []struct {
 		},
 	},
 	{
+		title: "性能诊断（仅日志查询）",
+		names: []optionName{{long: "debug"}},
+	},
+	{
 		title: "输出与帮助（日志 / 目录通用）",
 		names: []optionName{
 			{long: "json"},
@@ -68,7 +72,7 @@ var optionGroups = []struct {
 
 // writeHelp 将参数参考和排障规则集中展示，查询结果的输出格式保持独立。
 func writeHelp(output io.Writer, flags *flag.FlagSet) {
-	fmt.Fprint(output, `mct-syslogger — 本机 syslogger 日志目录与 journal 检索
+	fmt.Fprint(output, `mct-syslogger — 本模块的本机日志目录与 journal 检索
 
 用法：
   mct-syslogger [筛选参数] [时间参数] [输出参数]
@@ -121,6 +125,9 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     所有输入均通过参数传入，位置参数会报错。
   • project / instance_id / component 精确匹配、区分大小写，使用目录中的名称原文。
     同类身份重复取 OR，不同筛选条件取 AND；未指定某项身份时，该项不限。
+  • 日志来源为本模块的 syslog 输出：项目 tag 对应 SYSLOG_IDENTIFIER，severity 对应 PRIORITY。
+    默认在 journalctl 侧预筛项目和最终等级集合；项目 tag 的空白及控制字符按 SDK 规则转为下划线。
+    Go 再按正文原文复核项目、实例、组件、等级及内容，数量限制在全部筛选之后执行。
   • -l / --level 指定单一严重程度阈值，显示该等级及更严重等级；等级名使用小写。
     -l info 显示 info、notice、warning、error、critical、alert、emergency；-l debug 显示全部。
     默认 debug；重复指定 --level 或 -l 时，以最后一个值为准。
@@ -159,6 +166,11 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   • 查询结果写 stdout；帮助、参数错误和 journalctl 诊断写 stderr。
     退出码：0 成功 / 无匹配 / 帮助；1 查询失败；2 参数或正则错误；130 收到中断。
     journalctl 的权限或时间格式错误属于查询失败，返回 1，详细原因见 stderr。
+  • --debug 在查询结束或中断后向 stderr 汇总扫描量、匹配量、首行/首匹配/首输出延迟，
+    以及启动、读取、解析、筛选、格式化、写入和进程收尾耗时；不改变 stdout 格式。
+    journalctl.args 展示原生预筛条件，scanned_lines 是预筛后读入 Go 的行数。
+    fields 解码/编码耗时已包含在筛选或格式化中；read 含等待 journalctl，跟踪空闲也计入其中。
+    该开关用于性能诊断，与 -l debug（等级阈值）独立；计时本身会增加开销。
 
 排障示例（将 contract-listener / local-a / rpc 替换为实际身份）：
   查看本机身份目录，选择项目、实例和组件：
@@ -172,6 +184,9 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     mct-syslogger -i local-a -l info
     mct-syslogger -i local-a --include-level error --include-level critical
     mct-syslogger -i local-a --exclude-level debug
+
+  分析项目和实例查询的耗时，性能汇总写入 stderr：
+    mct-syslogger -p contract-listener -i listener-v2 -l notice --debug
 
   消息或业务字段必须同时包含 timeout 和 retry，关键词忽略大小写：
     mct-syslogger -i local-a -k timeout -k retry --ignore-case

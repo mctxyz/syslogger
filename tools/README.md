@@ -1,6 +1,6 @@
 # 日志检索工具
 
-`mct-syslogger` 提供本机日志名称目录和日志检索。目录查询读取共享 JSON，日志检索通过 Go 标准库调用本机 `journalctl`，使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析 syslogger 正文并过滤。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
+`mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询以模块的 syslog 输出为输入契约，通过 `journalctl` 的项目、等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
 
 ## 运行与快捷命令
 
@@ -123,7 +123,7 @@ slog -i local-a -n 500 --json
 
 | 参数 | 含义 |
 | --- | --- |
-| `-p / --project PROJECT` | JSON `project` 原文精确匹配，可重复（OR） |
+| `-p / --project PROJECT` | 先按模块项目 tag 预筛，再按 JSON `project` 原文精确匹配，可重复（OR） |
 | `-i / --instance-id INSTANCE` | JSON `instance_id` 原文精确匹配，可重复（OR） |
 | `-c / --component COMPONENT` | JSON `component` 原文精确匹配，可重复（OR） |
 | `-l / --level LEVEL` | 最低严重程度阈值，显示该等级及更严重等级；默认 `debug`（全部等级），重复时最后一个生效 |
@@ -139,6 +139,7 @@ slog -i local-a -n 500 --json
 | `--json` | 日志每行一条原始 JSON 正文（NDJSON），保留业务字段；目录输出实例对象数组 |
 | `--list` | 展示项目／实例／组件目录，支持身份筛选及 JSON、彩色输出 |
 | `--colour` | 开启 ANSI 彩色可读输出，默认关闭；`--colour=false` 显式关闭 |
+| `--debug` | 仅日志查询：结束或中断后向 stderr 输出分阶段耗时、扫描及匹配统计，默认关闭 |
 | `-h / --help` | 显示完整帮助并退出 |
 
 - 表中大写名称为值占位符，实际使用时替换为一个参数值。含空格或正则的值用引号包裹，如 `-s '2026-10-23 09:00:00 UTC'`、`-e '(?i)timeout'`；以 `-` 开头的时间值建议使用 `-s=-2h`。布尔参数直接开启或用 `--colour=false` 显式关闭，所有输入均通过参数传入。
@@ -151,14 +152,53 @@ slog -i local-a -n 500 --json
 - 普通查询默认取最新 100 条匹配日志，再按 journal 从旧到新显示；`-n 0` 流式显示范围内全部匹配日志。数量限制在所有过滤之后执行。
 - 跟踪默认输出起始时间以来的全部匹配历史并继续读取新日志，条数不限；只看新日志时用 `--since now -f`。`--until` 用于固定范围查询，与 `--follow` 分别使用。
 - 自动化跟踪宜显式指定正数 `-n`；匹配不足时仍会持续等待，调用方可另设执行时限。查询较早的事件时，同时扩大 `-s`，因为 `-n 0` 只改变条数上限。
-- 身份按 JSON 原文筛选，不依赖规范化后的 syslog tag。日志量较大时缩小时间范围可减少扫描；工具只展示结构符合 syslogger 格式的 JSON 正文。
+- 模块 syslog 发送器将项目 tag 的空白及控制字符转为下划线，journal 将其记录为 `SYSLOG_IDENTIFIER`；协议头的 severity 0～7 对应 `PRIORITY`。工具默认把指定项目和最终等级集合交给 journalctl 原生预筛，同字段重复匹配取 OR，项目与等级之间取 AND。全等级查询使用完整等级范围，空等级集合匹配模块不可能产生的 priority，并保留 journalctl 的参数校验和错误反馈。
+- 项目 tag 的规范化由发送器与查询工具共享；Go 使用正文项目原文继续精确复核，保证 tag 归一化碰撞时不会混入其他项目。实例、组件和内容条件在 Go 中筛选，journalctl 保持不限原生条数，达到全部筛选后的匹配上限才停止读取。
 - 查询先一次提取基础字段并组合判断项目、实例、组件和等级，再逐项检查 message；内容条件需要访问 fields 或可读输出需要显示它时，才展开业务字段。fields 的规范化 JSON 至多编码一次，供全部内容条件和显示复用；`--json` 保留原文，message 已满足全部内容条件时可跳过 fields 展开。整行语法和字段类型在输出与计数前校验，数字精度、字段键排序和转义规则保持一致。
-- 多级处理减少解析、对象分配和编码开销；journalctl 仍按时间范围读取，实际总耗时也受 journal 扫描与 I/O 影响。Go 1.23 已退出官方常规支持窗口，部署方需关注工具链安全维护。
+- journal 项目、等级预筛减少传入 Go 的无关正文，多级按需处理继续减少解析、对象分配和编码开销；缩小时间范围可进一步减少候选记录，实际总耗时也受 journal 索引、扫描及 I/O 影响。Go 1.23 已退出官方常规支持窗口，部署方需关注工具链安全维护。
 - 可读输出包含时间、等级、`project/instance_id/component`、消息及业务字段，换行和控制字符转义为单行。JSON 输出每行一条记录，不包含 journal 外层元数据。
-- 彩色输出中，`project` 使用紫色、`instance_id` 使用蓝色、`component` 使用青色、`message` 使用绿色、`fields` 使用黄色；时间及分隔符保留终端默认色。等级配色为：`emergency` 红底加粗白字、`alert` 加粗亮紫、`critical` 亮红、`error` 红、`warning` 黄、`notice` 青、`info` 绿、`debug` 灰。
+- 彩色输出中，`project` 使用紫色、`instance_id` 使用蓝色、`component` 使用青色、`message` 使用绿色、`fields` 使用中性浅灰色（ANSI 37），降低业务字段的视觉权重；时间及分隔符保留终端默认色。等级配色为：`emergency` 红底加粗白字、`alert` 加粗亮紫、`critical` 亮红、`error` 红、`warning` 黄、`notice` 青、`info` 绿、`debug` 灰。
 - `--colour` 输出 ANSI 转义序列，适用于支持 ANSI 颜色的终端，重定向时也保留颜色序列。纯文本输出使用默认设置或 `--colour=false`；`--json` 始终保留原始 JSON 正文。
 - 无匹配结果正常返回 `0`；参数或正则错误返回 `2`，查询失败返回 `1`，Ctrl+C 返回 `130`。journalctl 的权限或时间格式错误属于查询失败，返回 `1`，诊断保留在标准错误输出中；可见日志范围取决于设备权限与留存策略。
 - 查询结果写入 stdout，帮助及诊断写入 stderr。无结果时，先扩大时间范围，再核对身份和组合条件，最后检查 journal 权限及留存范围；名称目录提供历史身份线索，进程运行情况需结合实际日志判断。
+
+## 查询性能诊断
+
+在原有查询命令后添加 `--debug`，日志仍写入 stdout，性能汇总写入 stderr：
+
+```sh
+mct-syslogger -p contract-listener -i listener-v2 -l notice --debug
+
+# 单独保存性能汇总和 journalctl 诊断。
+mct-syslogger -p contract-listener -i listener-v2 -l notice --debug 2>query-debug.txt
+```
+
+该开关与 `-l debug`（显示全部等级的阈值）独立，可用 `--debug=false` 关闭。仅统计当前日志查询，查询完成、失败或 Ctrl+C 收尾后汇总一次；`--list` 使用目录查询流程，参数范围保持为身份筛选与目录输出选项。
+
+| 输出字段 | 含义 |
+| --- | --- |
+| `query.total`、`stop` | 查询总墙钟耗时（含启动与收尾，汇总打印前截止）；停止原因是 `eof`、`limit`、`canceled` 或 `error` |
+| `journalctl.args` | 实际交给 journalctl 的参数，用于核对项目、等级预筛条件、时间范围、反向读取和跟踪方式 |
+| `time.start`、`read` | 进程启动耗时；行读取累计耗时，包含等待 journalctl、管道读取和缓冲处理 |
+| `time.parse`、`filter` | 基础字段提取与整行合法性校验；身份、等级及内容筛选，后者包含按需 fields 处理 |
+| `time.format`、`write` | 最终文本构造（含可读输出所需 fields）；stdout 写入累计耗时 |
+| `time.wait`、`other` | 子进程取消及 Wait 收尾；其余查询编排、缓冲缓存和计时开销 |
+| `first.line`、`match`、`output` | 从查询开始到首个完整输入行返回、首次匹配、首条完整输出写入的延迟；事件未发生时显示 `n/a` |
+| `count.scanned_lines`、`scanned_bytes` | 原生预筛后已交付给 Go 过滤循环的输入行数和原始字节数，含换行与被正文复核排除的候选记录；不含未消费的预读余量，也不代表 journal 内部物理扫描量 |
+| `count.valid`、`base_matches`、`matched`、`written` | 有效 syslogger 记录、通过身份与等级的记录、通过全部条件的记录、完整写出的记录数 |
+| `fields.decode`、`encode`、`decodes`、`encodes` | 按需字段解码及规范化编码的累计耗时与实际调用次数；解码包含重新扫描根对象，空字段可解码但不编码 |
+
+顶层 `time` 各阶段加上 `other` 对应 `total`；`fields` 是 `filter` 或 `format` 内的子阶段，**不能再次相加**。全部为本进程观察到的墙钟耗时，journalctl 与 Go 处理可能并行，不能由此直接分解 journalctl 的 CPU、磁盘读取或解压耗时。跟踪模式的空闲等待计入 `read`。
+
+定位时优先关注：
+
+- `read` 很大：时间主要花在等待或接收 journalctl 输出。结合 `scanned_lines` 判断是否扫描了大量日志；缩小 `-s / -u` 时间范围做对照，不能仅凭这个值认定磁盘故障。
+- `scanned_lines` 很多、`base_matches` 很少：先从 `journalctl.args` 核对原生项目与等级条件，再判断实例、组件等正文条件是否命中稀疏。`base_matches` 较多但 `matched` 很少时，主要由内容条件继续排除候选记录。
+- `parse / filter / format` 很大：继续看 fields 子阶段、实际解码次数和内容条件，区分基础解析、字段搜索和显示成本。
+- `write` 很大：检查终端或下游管道是否消费缓慢。
+- `first.match` 很早、`first.output` 很晚：普通查询会先收集最新 N 条匹配日志，再倒序输出；不足 N 条时会读到时间范围结束。默认 N 为 100，`-n 0` 则按读取顺序流式输出全部结果，二者选择语义不同。
+
+`--debug` 会为每个阶段计时并累计计数，本身存在额外开销；关闭时不执行这些逐行计时。诊断输出失败按查询错误返回，已有查询错误仍可识别。
 
 ## 代码级测试
 
@@ -170,4 +210,4 @@ go vet ./tools/mct-syslogger ./internal/catalog
 GOTOOLCHAIN=go1.23.12 go test -run '^$' -bench '^(BenchmarkQueryRecord|BenchmarkFilterLogs)$' -benchmem ./tools/mct-syslogger
 ```
 
-测试使用内存日志、隔离目录和测试辅助进程，覆盖目录发布与读取、筛选和输出，以及日志解析、数量限制、跟踪参数及收尾，不读取真实系统日志。JSON 差分测试和 fuzz 使用优化前标准库实现作为对照，覆盖重复键合并、空值、非法内容、精度、转义、按需展开及缓存所有权；基准分别测量单条 CPU 路径和含行读取、缓存反转、写入的完整过滤路径。
+测试使用内存日志、隔离目录和测试辅助进程，覆盖目录发布与读取、筛选和输出，以及日志解析、数量限制、跟踪参数及收尾，不读取真实系统日志。JSON 差分测试和 fuzz 使用优化前标准库实现作为对照，覆盖重复键合并、空值、非法内容、精度、转义、按需展开及缓存所有权；基准分别测量单条 CPU 路径和含行读取、缓存反转、写入的完整过滤路径。原生预筛测试使用 SDK 编码的正文与元数据，覆盖等级阈值、包含/排除、多项目、tag 归一化碰撞、实例/组件/内容复核及匹配后限量。性能诊断测试覆盖分级计数、字段复用、读取/写入归属、stderr 分流、取消和错误；`BenchmarkFilterDebug` 对照开启与关闭诊断时的处理开销。

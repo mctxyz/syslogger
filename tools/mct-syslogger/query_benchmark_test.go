@@ -171,7 +171,12 @@ func BenchmarkFilterLogs(b *testing.B) {
 			run  func(io.Reader, io.Writer, options) (bool, error)
 		}{
 			{name: "reference", run: referenceFilterLogs},
-			{name: "go-json", run: filterLogs},
+			{
+				name: "go-json",
+				run: func(input io.Reader, output io.Writer, opts options) (bool, error) {
+					return filterLogs(input, output, opts, nil)
+				},
+			},
 		} {
 			b.Run(mode.name+"/"+implementation.name, func(b *testing.B) {
 				// 限量查询实际只读取前缀，按同一读取行为报告吞吐字节数。
@@ -213,7 +218,7 @@ func TestQueryPeakMemory(t *testing.T) {
 	case "reference":
 		_, err = referenceFilterLogs(bytes.NewReader(data), io.Discard, opts)
 	case "go-json":
-		_, err = filterLogs(bytes.NewReader(data), io.Discard, opts)
+		_, err = filterLogs(bytes.NewReader(data), io.Discard, opts, nil)
 	default:
 		t.Fatal("未知测试实现：" + strings.TrimSpace(implementation))
 	}

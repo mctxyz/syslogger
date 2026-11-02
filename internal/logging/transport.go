@@ -6,10 +6,10 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
-	"unicode"
+
+	"github.com/mctxyz/syslogger/internal/identity"
 )
 
 // 本机 IPC 使用有限等待；业务线程只负责编码和入队。
@@ -64,12 +64,7 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 		t.mu.Unlock()
 	}
 	// 仅协议头规范化空白及控制字符，JSON 中的项目原文保持完整。
-	tag := strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return '_'
-		}
-		return r
-	}, t.tag)
+	tag := identity.SyslogTag(t.tag)
 	data := []byte(fmt.Sprintf("<%d>%s %s[%d]: ", 8+entry.Severity, time.Now().Format(time.Stamp), tag, os.Getpid()))
 	data = append(data, entry.Body...)
 	if network == "unix" {

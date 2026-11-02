@@ -15,7 +15,8 @@ const (
 	colourInstance  = "\x1b[34m"
 	colourComponent = "\x1b[36m"
 	colourMessage   = "\x1b[32m"
-	colourFields    = "\x1b[33m"
+	// 业务字段使用中性浅灰，降低视觉权重并与等级、身份及消息配色区分。
+	colourFields = "\x1b[37m"
 )
 
 // levelColours 按严重程度分配独立样式，紧急事件通过背景及加粗突出显示。

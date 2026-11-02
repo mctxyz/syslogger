@@ -60,6 +60,7 @@ type options struct {
 	ignoreKeywordCase bool
 	colour            bool
 	list              bool
+	debug             bool
 }
 
 func parseOptions(args []string, help io.Writer) (options, error) {
@@ -84,6 +85,7 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	flags.BoolVar(&opts.ignoreKeywordCase, "ignore-case", false, "仅关键词忽略大小写；身份、等级和正则保留各自匹配规则")
 	flags.BoolVar(&opts.colour, "colour", false, "启用 ANSI 彩色可读输出，默认关闭；--colour=false 关闭")
 	flags.BoolVar(&opts.list, "list", false, "查看本机项目、实例、组件名称及描述，支持身份筛选")
+	flags.BoolVar(&opts.debug, "debug", false, "查询结束或中断后向 stderr 输出分阶段耗时与扫描统计；仅日志查询")
 	for _, group := range optionGroups {
 		for _, name := range group.names {
 			if name.short != "" {

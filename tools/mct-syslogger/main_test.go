@@ -378,6 +378,9 @@ func TestColourFormatting(t *testing.T) {
 			if style == "" || seenLevelStyles[style] {
 				t.Fatalf("等级 %s 缺少独立颜色样式", level)
 			}
+			if style == colourFields {
+				t.Fatalf("fields 配色不应与等级 %s 重复", level)
+			}
 			seenLevelStyles[style] = true
 			plain := recordText(t, &record, false, false)
 			coloured := recordText(t, &record, false, true)
@@ -488,7 +491,7 @@ func TestFilterLogsColour(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			opts := testOptions(t, test.args...)
 			var output bytes.Buffer
-			complete, err := filterLogs(strings.NewReader(line+"\n"), &output, opts)
+			complete, err := filterLogs(strings.NewReader(line+"\n"), &output, opts, nil)
 			if err != nil || !complete {
 				t.Fatalf("颜色输出读取失败：complete=%v err=%v", complete, err)
 			}
@@ -597,7 +600,7 @@ func TestMatchLimitAndOrder(t *testing.T) {
 		fmt.Fprintln(&input, sampleLine(fmt.Sprint(i), instance, "rpc"))
 	}
 	var output bytes.Buffer
-	complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, "-i", "local-a", "--json"))
+	complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, "-i", "local-a", "--json"), nil)
 	if err != nil || complete {
 		t.Fatalf("达到匹配数量应提前停止：complete=%v err=%v", complete, err)
 	}
@@ -623,13 +626,13 @@ func TestStreamAllAndFollow(t *testing.T) {
 		{"-f"},
 	} {
 		var output bytes.Buffer
-		complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, append(args, "--json")...))
+		complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, append(args, "--json")...), nil)
 		if err != nil || !complete || output.String() != input.String() {
 			t.Fatalf("全量读取未保持顺序：args=%v complete=%v err=%v", args, complete, err)
 		}
 	}
 	var output bytes.Buffer
-	complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, "-f", "-n", "2", "--json"))
+	complete, err := filterLogs(strings.NewReader(input.String()), &output, testOptions(t, "-f", "-n", "2", "--json"), nil)
 	if err != nil || complete || strings.Count(output.String(), "\n") != 2 {
 		t.Fatalf("跟踪模式未按显式条数退出：complete=%v err=%v", complete, err)
 	}
@@ -638,7 +641,7 @@ func TestStreamAllAndFollow(t *testing.T) {
 func TestLargeAndFinalLines(t *testing.T) {
 	line := sampleLine(strings.Repeat("消息", 30000), "local-a", "rpc")
 	var output bytes.Buffer
-	complete, err := filterLogs(strings.NewReader("ordinary log\n{}\n"+line), &output, testOptions(t, "-n", "0", "--json"))
+	complete, err := filterLogs(strings.NewReader("ordinary log\n{}\n"+line), &output, testOptions(t, "-n", "0", "--json"), nil)
 	if err != nil || !complete || output.String() != line+"\n" {
 		t.Fatalf("大日志或末行读取失败：complete=%v err=%v", complete, err)
 	}
@@ -652,6 +655,19 @@ func TestMain(m *testing.M) {
 			os.Exit(7)
 		}
 		lines := strings.Split(strings.TrimSuffix(os.Getenv("SYSLOGGER_LOG_TEST_DATA"), "\n"), "\n")
+		if data := os.Getenv("SYSLOGGER_LOG_TEST_ENTRIES"); data != "" {
+			var entries []journalTestEntry
+			if err := json.Unmarshal([]byte(data), &entries); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+			var err error
+			lines, err = journalTestLines(os.Args[1:], entries)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+		}
 		if contains(os.Args[1:], "--reverse") {
 			for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
 				lines[i], lines[j] = lines[j], lines[i]
@@ -682,6 +698,7 @@ func fakeJournal(t *testing.T, mode string) {
 	t.Setenv("SYSLOGGER_LOG_TEST_HELPER", "1")
 	t.Setenv("SYSLOGGER_LOG_TEST_MODE", mode)
 	t.Setenv("SYSLOGGER_LOG_TEST_DATA", sampleLine("wanted", "local-a", "rpc"))
+	t.Setenv("SYSLOGGER_LOG_TEST_ENTRIES", "")
 }
 
 func TestQueryNaturalExitAndFailure(t *testing.T) {
