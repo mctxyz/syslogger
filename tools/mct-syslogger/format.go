@@ -8,15 +8,15 @@ import (
 	"time"
 )
 
-// 字段使用固定 ANSI 前景色，每个片段结束后恢复终端样式。
+// 彩色片段指定前景色或弱化亮度，每个片段结束后恢复终端样式。
 const (
 	colourReset     = "\x1b[0m"
 	colourProject   = "\x1b[35m"
 	colourInstance  = "\x1b[34m"
 	colourComponent = "\x1b[36m"
 	colourMessage   = "\x1b[32m"
-	// 业务字段使用中性浅灰，降低视觉权重并与等级、身份及消息配色区分。
-	colourFields = "\x1b[37m"
+	// 业务字段沿用终端默认前景色并弱化亮度，与正常亮度的时间及其他彩色片段区分。
+	colourFields = "\x1b[2m"
 )
 
 // levelColours 按严重程度分配独立样式，紧急事件通过背景及加粗突出显示。

@@ -583,6 +583,9 @@ func TestReadableTimestamp(t *testing.T) {
 			if got := recordText(t, &record, false, false); !strings.HasPrefix(got, test.want+" ERROR") {
 				t.Fatalf("可读时间格式错误：%q", got)
 			}
+			if got := recordText(t, &record, false, true); !strings.HasPrefix(got, test.want+" "+levelColours["error"]) {
+				t.Fatalf("时间应保留终端默认样式及正确内容：%q", got)
+			}
 			if got := recordText(t, &record, true, false); got != line {
 				t.Fatalf("JSON 输出改变了原始时间：%s", got)
 			}
