@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -13,14 +15,17 @@ import (
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/identity"
+	"github.com/mctxyz/syslogger/internal/journalwire"
 	"github.com/mctxyz/syslogger/internal/logging"
 )
 
 // journalTestEntry 为假 journalctl 提供独立的元数据和由 SDK 编码的正文。
 type journalTestEntry struct {
-	Message    string `json:"MESSAGE"`
-	Identifier string `json:"SYSLOG_IDENTIFIER"`
-	Priority   string `json:"PRIORITY"`
+	Message   string `json:"MESSAGE"`
+	Priority  string `json:"PRIORITY"`
+	Project   string `json:"SYSLOGGER_PROJECT"`
+	Instance  string `json:"SYSLOGGER_INSTANCE_ID"`
+	Component string `json:"SYSLOGGER_COMPONENT"`
 }
 
 func journalMatchValues(args []string, prefix string) []string {
@@ -35,17 +40,34 @@ func journalMatchValues(args []string, prefix string) []string {
 
 // journalTestLines 模拟同字段 OR、跨字段 AND，以及原生条数限制；反转仍由 TestMain 统一执行。
 func journalTestLines(args []string, entries []journalTestEntry) ([]string, error) {
-	identifiers := journalMatchValues(args, "SYSLOG_IDENTIFIER=")
-	priorities := journalMatchValues(args, "PRIORITY=")
+	matches := map[string][]string{}
+	for _, argument := range args {
+		if strings.HasPrefix(argument, "--") {
+			continue
+		}
+		field, value, match := strings.Cut(argument, "=")
+		if match {
+			matches[field] = append(matches[field], value)
+		}
+	}
 	var lines []string
 	for _, entry := range entries {
-		if len(identifiers) > 0 && !contains(identifiers, entry.Identifier) {
-			continue
+		fields := map[string]string{
+			"PRIORITY":                 entry.Priority,
+			journalwire.ProjectField:   entry.Project,
+			journalwire.InstanceField:  entry.Instance,
+			journalwire.ComponentField: entry.Component,
 		}
-		if len(priorities) > 0 && !contains(priorities, entry.Priority) {
-			continue
+		matched := true
+		for field, values := range matches {
+			if !contains(values, fields[field]) {
+				matched = false
+				break
+			}
 		}
-		lines = append(lines, entry.Message)
+		if matched {
+			lines = append(lines, entry.Message)
+		}
 	}
 	limit := 0
 	for _, value := range journalMatchValues(args, "--lines=") {
@@ -78,9 +100,11 @@ func moduleJournalEntry(t *testing.T, message, project, instance, component stri
 		t.Fatal(err)
 	}
 	return journalTestEntry{
-		Message:    string(entry.Body),
-		Identifier: identity.SyslogTag(project),
-		Priority:   strconv.Itoa(int(entry.Severity)),
+		Message:   string(entry.Body),
+		Priority:  strconv.Itoa(int(entry.Severity)),
+		Project:   project,
+		Instance:  instance,
+		Component: component,
 	}
 }
 
@@ -91,38 +115,47 @@ func fakeJournalEntries(t *testing.T, entries []journalTestEntry) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SYSLOGGER_LOG_TEST_ENTRIES", string(data))
+	// 元数据样本使用隔离文件，避免大型混合日志超过单条环境变量长度限制。
+	path := filepath.Join(t.TempDir(), "entries.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SYSLOGGER_LOG_TEST_ENTRIES_FILE", path)
 }
 
 func TestJournalNativeMatches(t *testing.T) {
 	for _, test := range []struct {
-		name        string
-		args        []string
-		identifiers []string
-		priorities  []string
+		name       string
+		args       []string
+		projects   []string
+		instances  []string
+		components []string
+		priorities []string
 	}{
 		{name: "all-levels"},
 		{
-			name:        "project-and-threshold",
-			args:        []string{"-p", "contract-listener", "-i", "listener-v2", "-c", "rpc", "-l", "notice"},
-			identifiers: []string{"contract-listener"},
-			priorities:  []string{"0", "1", "2", "3", "4", "5"},
+			name:       "project-and-threshold",
+			args:       []string{"-p", "contract-listener", "-i", "listener-v2", "-c", "rpc", "-l", "notice"},
+			projects:   []string{"contract-listener"},
+			instances:  []string{"listener-v2"},
+			components: []string{"rpc"},
+			priorities: []string{"0", "1", "2", "3", "4", "5"},
 		},
 		{
-			name:        "multiple-projects",
-			args:        []string{"-p", "first", "-p", "second", "--include-level", "error", "--include-level", "info"},
-			identifiers: []string{"first", "second"},
-			priorities:  []string{"3", "6"},
+			name:       "multiple-projects",
+			args:       []string{"-p", "first", "-p", "second", "--include-level", "error", "--include-level", "info"},
+			projects:   []string{"first", "second"},
+			priorities: []string{"3", "6"},
 		},
 		{
-			name:        "normalized-project",
-			args:        []string{"-p", "a b\t\n\x1b", "-p", "项目\u00a0v2"},
-			identifiers: []string{"a_b___", "项目_v2"},
+			name:     "raw-project",
+			args:     []string{"-p", "a b\t\n\x1b", "-p", "项目\u00a0v2"},
+			projects: []string{"a b\t\n\x1b", "项目\u00a0v2"},
 		},
 		{
-			name:        "literal-argument",
-			args:        []string{"-p", "a=+; --reverse"},
-			identifiers: []string{"a=+;_--reverse"},
+			name:     "literal-argument",
+			args:     []string{"-p", "a=+; --reverse"},
+			projects: []string{"a=+; --reverse"},
 		},
 		{
 			name:       "noncontiguous-levels",
@@ -142,8 +175,14 @@ func TestJournalNativeMatches(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			args := testOptions(t, test.args...).journalArgs()
-			if got := journalMatchValues(args, "SYSLOG_IDENTIFIER="); !reflect.DeepEqual(got, test.identifiers) {
-				t.Fatalf("项目预筛错误：got=%q want=%q", got, test.identifiers)
+			if got := journalMatchValues(args, journalwire.ProjectField+"="); !reflect.DeepEqual(got, test.projects) {
+				t.Fatalf("项目预筛错误：got=%q want=%q", got, test.projects)
+			}
+			if got := journalMatchValues(args, journalwire.InstanceField+"="); !reflect.DeepEqual(got, test.instances) {
+				t.Fatalf("实例预筛错误：got=%q want=%q", got, test.instances)
+			}
+			if got := journalMatchValues(args, journalwire.ComponentField+"="); !reflect.DeepEqual(got, test.components) {
+				t.Fatalf("组件预筛错误：got=%q want=%q", got, test.components)
 			}
 			if got := journalMatchValues(args, "PRIORITY="); !reflect.DeepEqual(got, test.priorities) {
 				t.Fatalf("等级预筛错误：got=%q want=%q", got, test.priorities)
@@ -221,9 +260,9 @@ func TestQueryNativePrefilterBeforeMatchLimit(t *testing.T) {
 		count   string
 		outcome string
 	}{
-		{name: "recent", args: []string{"-n", "2"}, want: wanted[1:], count: "scanned_lines=20 ", outcome: "limit"},
+		{name: "recent", args: []string{"-n", "2"}, want: wanted[1:], count: "scanned_lines=5 ", outcome: "limit"},
 		{name: "follow", args: []string{"-f", "-n", "2"}, want: wanted[:2], count: "scanned_lines=2 ", outcome: "limit"},
-		{name: "all", args: []string{"-n", "0"}, want: wanted, count: "scanned_lines=21 ", outcome: "eof"},
+		{name: "all", args: []string{"-n", "0"}, want: wanted, count: "scanned_lines=6 ", outcome: "eof"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fakeJournalEntries(t, entries)
@@ -242,7 +281,7 @@ func TestQueryNativePrefilterBeforeMatchLimit(t *testing.T) {
 	}
 }
 
-func TestQueryNativeTagCollision(t *testing.T) {
+func TestQueryRawProjectIdentity(t *testing.T) {
 	wanted := moduleJournalEntry(t, "wanted", "a b", "local-a", "rpc", logging.Error)
 	other := moduleJournalEntry(t, "other", "a_b", "local-a", "rpc", logging.Error)
 	fakeJournalEntries(t, []journalTestEntry{wanted, other})
@@ -251,7 +290,7 @@ func TestQueryNativeTagCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	if output.String() != wanted.Message+"\n" {
-		t.Fatal("tag 归一化碰撞应由正文项目精确匹配消解")
+		t.Fatal("原文项目身份索引混入了其他项目")
 	}
 }
 
@@ -262,5 +301,82 @@ func TestQueryNativeEmptyLevelsKeepsJournalErrors(t *testing.T) {
 	if err := query(context.Background(), opts, io.Discard, &diagnostics); err == nil ||
 		!strings.Contains(diagnostics.String(), "journal permission denied") {
 		t.Fatal("空等级集合仍应保留 journalctl 的执行与错误反馈")
+	}
+}
+
+func TestIndexedIdentitiesBeforeMatchLimit(t *testing.T) {
+	var entries []journalTestEntry
+	var wanted []string
+	for index := 0; index < 3; index++ {
+		entry := moduleJournalEntry(t, fmt.Sprintf("native-%d", index), "p", "local", "rpc", logging.Info)
+		entries = append(entries, entry)
+		wanted = append(wanted, entry.Message)
+	}
+	for index := 0; index < 1000; index++ {
+		entries = append(entries, moduleJournalEntry(t, "native-other", "p", "other", "rpc", logging.Info))
+		entries = append(entries, moduleJournalEntry(t, "native-other-component", "p", "local", "jobs", logging.Info))
+	}
+	for _, test := range []struct {
+		name  string
+		args  []string
+		want  []string
+		count string
+	}{
+		{name: "recent", args: []string{"-n", "2"}, want: wanted[1:], count: "scanned_lines=2 "},
+		{name: "all", args: []string{"-n", "0"}, want: wanted, count: "scanned_lines=3 "},
+		{name: "follow", args: []string{"-f", "-n", "2"}, want: wanted[:2], count: "scanned_lines=2 "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fakeJournalEntries(t, entries)
+			args := append([]string{"--json", "--debug", "-p", "p", "-i", "local", "-c", "rpc"}, test.args...)
+			var output, diagnostics bytes.Buffer
+			if err := query(context.Background(), testOptions(t, args...), &output, &diagnostics); err != nil {
+				t.Fatal(err)
+			}
+			if output.String() != strings.Join(test.want, "\n")+"\n" || !strings.Contains(diagnostics.String(), test.count) {
+				t.Fatalf("身份索引、顺序或匹配后限量不符: %s\n%s", output.String(), diagnostics.String())
+			}
+		})
+	}
+}
+
+func TestIndexedIdentityORAndRawProject(t *testing.T) {
+	wanted := moduleJournalEntry(t, "wanted", "a b", "local", "rpc", logging.Error)
+	other := moduleJournalEntry(t, "collision", "a_b", "local", "rpc", logging.Error)
+	second := moduleJournalEntry(t, "second", "a b", "second", "jobs", logging.Warning)
+	entries := []journalTestEntry{wanted, other, second}
+	for _, test := range []struct {
+		args []string
+		want []string
+	}{
+		{args: nil, want: []string{wanted.Message, other.Message, second.Message}},
+		{args: []string{"-i", "local", "-c", "rpc"}, want: []string{wanted.Message, other.Message}},
+		{args: []string{"-i", "second"}, want: []string{second.Message}},
+		{args: []string{"-c", "jobs"}, want: []string{second.Message}},
+		{args: []string{"-p", "a b", "-i", "local", "-c", "rpc"}, want: []string{wanted.Message}},
+		{args: []string{"-p", "a b", "-p", "a_b", "-l", "warning"}, want: []string{wanted.Message, other.Message, second.Message}},
+		{args: []string{"-p", "a b", "-i", "local", "-i", "second", "-c", "rpc", "-c", "jobs"}, want: []string{wanted.Message, second.Message}},
+		{args: []string{"-p", "a b", "-i", "local", "-c", "jobs"}, want: nil},
+		{args: []string{"-p", "a b", "-l", "error"}, want: []string{wanted.Message}},
+	} {
+		opts := testOptions(t, append([]string{"-n", "0", "--json"}, test.args...)...)
+		lines, err := journalTestLines(opts.journalArgs(), entries)
+		if err != nil || !reflect.DeepEqual(lines, test.want) {
+			t.Fatalf("原文身份、OR/AND 或等级索引不符: got=%v want=%v err=%v", lines, test.want, err)
+		}
+	}
+}
+
+func TestIndexedMetadataStillRechecksBody(t *testing.T) {
+	wanted := moduleJournalEntry(t, "wanted", "a b", "local", "rpc", logging.Error)
+	spoofed := moduleJournalEntry(t, "wrong-body", "a_b", "local", "rpc", logging.Error)
+	spoofed.Project = "a b"
+	fakeJournalEntries(t, []journalTestEntry{wanted, spoofed})
+	var output bytes.Buffer
+	if err := query(context.Background(), testOptions(t, "--json", "-n", "0", "-p", "a b", "-i", "local"), &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != wanted.Message+"\n" {
+		t.Fatal("原生字段预筛绕过了正文身份复核")
 	}
 }

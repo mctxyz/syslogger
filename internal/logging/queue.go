@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
+	"github.com/mctxyz/syslogger/internal/identity"
 )
 
 var (
@@ -47,11 +48,15 @@ type Queue struct {
 func New(capacity int, path, project, instance, component string, activityWake chan<- struct{}) *Queue {
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &Queue{
-		entries:      make(chan *Entry, capacity),
-		done:         make(chan struct{}),
-		ctx:          ctx,
-		cancel:       cancel,
-		transport:    transport{path: path, tag: project},
+		entries: make(chan *Entry, capacity),
+		done:    make(chan struct{}),
+		ctx:     ctx,
+		cancel:  cancel,
+		transport: transport{
+			path:      path,
+			id:        identity.Instance{Project: project, InstanceID: instance},
+			component: component,
+		},
 		identity:     fmt.Sprintf("project=%q instance_id=%q component=%q", project, instance, component),
 		activityWake: activityWake,
 	}

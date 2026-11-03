@@ -127,8 +127,10 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     所有输入均通过参数传入，位置参数会报错。
   • project / instance_id / component 精确匹配、区分大小写，使用目录中的名称原文。
     同类身份重复取 OR，不同筛选条件取 AND；未指定某项身份时，该项不限。
-  • 日志来源为本模块的 syslog 输出：项目 tag 对应 SYSLOG_IDENTIFIER，severity 对应 PRIORITY。
-    默认在 journalctl 侧预筛项目和最终等级集合；项目 tag 的空白及控制字符按 SDK 规则转为下划线。
+  • 日志来源为本模块的原生 journal 输出，severity 对应 PRIORITY。
+    SDK 写入 SYSLOGGER_PROJECT、SYSLOGGER_INSTANCE_ID、SYSLOGGER_COMPONENT，
+    journalctl 使用这些原文身份字段和最终等级集合预筛。
+    应用需升级 SDK 并重新部署；身份筛选依赖对应原生字段，采集转发也须保留这些字段。
     Go 再按正文原文复核项目、实例、组件、等级及内容，数量限制在全部筛选之后执行。
   • -l / --level 指定单一严重程度阈值，显示该等级及更严重等级；等级名使用小写。
     -l info 显示 info、notice、warning、error、critical、alert、emergency；-l debug 显示全部。

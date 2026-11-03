@@ -658,13 +658,17 @@ func TestMain(m *testing.M) {
 			os.Exit(7)
 		}
 		lines := strings.Split(strings.TrimSuffix(os.Getenv("SYSLOGGER_LOG_TEST_DATA"), "\n"), "\n")
-		if data := os.Getenv("SYSLOGGER_LOG_TEST_ENTRIES"); data != "" {
-			var entries []journalTestEntry
-			if err := json.Unmarshal([]byte(data), &entries); err != nil {
+		if path := os.Getenv("SYSLOGGER_LOG_TEST_ENTRIES_FILE"); path != "" {
+			data, err := os.ReadFile(path)
+			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(2)
 			}
-			var err error
+			var entries []journalTestEntry
+			if err := json.Unmarshal(data, &entries); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
 			lines, err = journalTestLines(os.Args[1:], entries)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
@@ -701,7 +705,7 @@ func fakeJournal(t *testing.T, mode string) {
 	t.Setenv("SYSLOGGER_LOG_TEST_HELPER", "1")
 	t.Setenv("SYSLOGGER_LOG_TEST_MODE", mode)
 	t.Setenv("SYSLOGGER_LOG_TEST_DATA", sampleLine("wanted", "local-a", "rpc"))
-	t.Setenv("SYSLOGGER_LOG_TEST_ENTRIES", "")
+	t.Setenv("SYSLOGGER_LOG_TEST_ENTRIES_FILE", "")
 }
 
 func TestQueryNaturalExitAndFailure(t *testing.T) {

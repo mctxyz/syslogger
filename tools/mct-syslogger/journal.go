@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mctxyz/syslogger/internal/identity"
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 func (opts options) journalArgs() []string {
@@ -30,9 +30,18 @@ func (opts options) journalArgs() []string {
 			args = append(args, "--reverse")
 		}
 	}
-	// 模块的 syslog tag 来自项目；同字段的重复 match 由 journalctl 按 OR 组合，不同字段取 AND。
-	for _, project := range opts.projects {
-		args = append(args, "SYSLOG_IDENTIFIER="+identity.SyslogTag(project))
+	// 原文身份字段直接参与索引；相同字段取 OR，不同字段取 AND。
+	for _, selector := range []struct {
+		field  string
+		values []string
+	}{
+		{journalwire.ProjectField, opts.projects},
+		{journalwire.InstanceField, opts.instances},
+		{journalwire.ComponentField, opts.components},
+	} {
+		for _, value := range selector.values {
+			args = append(args, selector.field+"="+value)
+		}
 	}
 	if len(opts.levels) == 0 {
 		// SDK 只发送 severity 0～7；用不存在的值表达空集合，同时保留 journalctl 的校验与错误反馈。

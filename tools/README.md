@@ -1,6 +1,6 @@
 # 日志检索工具
 
-`mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询以模块的 syslog 输出为输入契约，通过 `journalctl` 的项目、等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
+`mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询以模块的原生 journal JSON 正文为输入契约，通过 `journalctl` 的项目、实例、组件和等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
 
 ## 运行与快捷命令
 
@@ -156,10 +156,11 @@ slog -i local-a -n 500 --json
 - 普通查询默认取最新 100 条匹配日志，再按 journal 从旧到新显示；`-n 0` 流式显示范围内全部匹配日志。数量限制在所有过滤之后执行。
 - 跟踪默认输出起始时间以来的全部匹配历史并继续读取新日志，条数不限；只看新日志时用 `--since now -f`。`--until` 用于固定范围查询，与 `--follow` 分别使用。
 - 自动化跟踪宜显式指定正数 `-n`；匹配不足时仍会持续等待，调用方可另设执行时限。查询较早的事件时，同时扩大 `-s`，因为 `-n 0` 只改变条数上限。
-- 模块 syslog 发送器将项目 tag 的空白及控制字符转为下划线，journal 将其记录为 `SYSLOG_IDENTIFIER`；协议头的 severity 0～7 对应 `PRIORITY`。工具默认把指定项目和最终等级集合交给 journalctl 原生预筛，同字段重复匹配取 OR，项目与等级之间取 AND。全等级查询使用完整等级范围，空等级集合匹配模块不可能产生的 priority，并保留 journalctl 的参数校验和错误反馈。
-- 项目 tag 的规范化由发送器与查询工具共享；Go 使用正文项目原文继续精确复核，保证 tag 归一化碰撞时不会混入其他项目。实例、组件和内容条件在 Go 中筛选，journalctl 保持不限原生条数，达到全部筛选后的匹配上限才停止读取。
+- 模块在 Linux 默认优先原生 journal，保留 `SYSLOG_IDENTIFIER` 项目 tag、LOG_USER 和 `PRIORITY`，并以 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 保存原文身份。显式自定义 syslog socket 及无原生入口的平台继续使用传统 syslog；JSON 正文保持一致。
+- 工具按原生身份字段与最终等级直接预筛，同字段重复匹配取 OR，不同字段取 AND。应用需升级 SDK 并重新部署，外部采集转发须保留三个 `SYSLOGGER_*` 身份字段；身份查询依赖这些字段。无需筛选身份时维持全范围读取；空等级集合仍保留 journalctl 的校验和错误反馈。
+- 发送器与查询工具共享原生字段名，项目按原文匹配；Go 继续复核全部正文身份、等级和内容，避免不一致元数据混入结果。journalctl 保持不限原生条数，达到全部筛选后的匹配上限才停止读取，普通查询、跟踪、JSON 和输出顺序保持原契约。
 - 查询先一次提取基础字段并组合判断项目、实例、组件和等级，再逐项检查 message；内容条件需要访问 fields 或可读输出需要显示它时，才展开业务字段。fields 的规范化 JSON 至多编码一次，供全部内容条件和显示复用；`--json` 保留原文，message 已满足全部内容条件时可跳过 fields 展开。整行语法和字段类型在输出与计数前校验，数字精度、字段键排序和转义规则保持一致。
-- journal 项目、等级预筛减少传入 Go 的无关正文，多级按需处理继续减少解析、对象分配和编码开销；缩小时间范围可进一步减少候选记录，实际总耗时也受 journal 索引、扫描及 I/O 影响。Go 1.23 已退出官方常规支持窗口，部署方需关注工具链安全维护。
+- journal 身份、等级预筛减少传入 Go 的无关正文，多级按需处理继续减少解析、对象分配和编码开销；缩小时间范围可进一步减少候选记录，实际总耗时也受 journal 索引、扫描及 I/O 影响。Go 1.23 已退出官方常规支持窗口，部署方需关注工具链安全维护。
 - 可读输出包含时间、等级、`project/instance_id/component`、消息及业务字段，换行和控制字符转义为单行。JSON 输出每行一条记录，不包含 journal 外层元数据。
 - 彩色输出中，时间及分隔符使用终端默认前景色和亮度，`project` 使用紫色、`instance_id` 使用蓝色、`component` 使用青色、`message` 使用绿色；`fields` 沿用终端默认前景色并弱化亮度（ANSI 2），通过明暗与时间区分，实际效果由终端主题和样式支持决定。等级配色为：`emergency` 红底加粗白字、`alert` 加粗亮紫、`critical` 亮红、`error` 红、`warning` 黄、`notice` 青、`info` 绿、`debug` 灰。
 - `--colour` 输出 ANSI 转义序列，适用于支持 ANSI 颜色的终端，重定向时也保留颜色序列。纯文本输出使用默认设置或 `--colour=false`；`--json` 始终保留原始 JSON 正文。
