@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Merge 在项目文件锁内将本次成功入队增量加入已有记录，写入成功后调用方消费该增量。
+// Merge 在项目文件锁内将本次成功接收增量加入已有记录，写入成功后调用方消费该增量。
 func (s Store) Merge(delta Instance, now time.Time) error {
 	delta = delta.Active(now)
 	if len(delta.Components) == 0 {
@@ -32,7 +32,7 @@ func (s Store) Merge(delta Instance, now time.Time) error {
 	if err == nil && (instance.Project != delta.Project || instance.InstanceID != delta.InstanceID) {
 		return fmt.Errorf("日志目录 %s 的身份与文件路径不符", path)
 	}
-	// 历史是否连续由实际入队时刻决定，跨过期点才刷盘的活动仍可延续原记录。
+	// 历史是否连续由实际接收时刻决定，跨过期点才刷盘的活动仍可延续原记录。
 	mergeAt := now.Add(-SyncInterval)
 	for _, component := range delta.Components {
 		if component.CreatedAt.Before(mergeAt) {

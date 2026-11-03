@@ -115,7 +115,7 @@ type ComponentConfig struct {
 	QueueCapacity int
 }
 
-// Register 根据配置建立独立模块，名称目录由该模块后续成功入队的日志建立。
+// Register 根据配置建立独立模块，名称目录由该模块后续成功接收的日志建立。
 // 模块集合在交出 Handler、开始启动指标出口或首次 Registry 采集时固定。
 func (m *Manager) Register(cfg ComponentConfig) (component *Component, err error) {
 	name, queueCapacity := cfg.Name, cfg.QueueCapacity

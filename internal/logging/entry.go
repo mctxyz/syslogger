@@ -27,7 +27,7 @@ const (
 
 var levelNames = [...]string{"emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"}
 
-// Entry 以单指针入队，正文由本次编码独立持有。
+// Entry 独立持有本次编码正文，供队列和同步发送按指针交付。
 type Entry struct {
 	Severity Level
 	Body     []byte

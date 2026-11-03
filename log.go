@@ -5,7 +5,7 @@ import "github.com/mctxyz/syslogger/internal/logging"
 // Fields 表示日志事件的结构化业务字段，值按 JSON 规则编码。
 type Fields map[string]any
 
-// ErrClosed 表示管理器已关闭，指标出口接口可用 errors.Is 判断。
+// ErrClosed 表示管理器或日志接收已关闭，返回错误的接口可用 errors.Is 判断。
 var ErrClosed = logging.ErrClosed
 
 // Emergency 以原生 severity 0 提交事件，提交失败通过标准日志诊断。

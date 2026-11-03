@@ -34,7 +34,7 @@ func (m *Manager) runCatalog() {
 	}
 }
 
-// publishCatalog 取走组件入队窗口后在集合锁外合并写入，失败时恢复窗口供下周期同步。
+// publishCatalog 取走组件接收窗口后在集合锁外合并写入，失败时恢复窗口供下周期同步。
 func (m *Manager) publishCatalog() {
 	if m.catalog == nil {
 		return

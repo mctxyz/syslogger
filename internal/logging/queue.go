@@ -19,20 +19,21 @@ var (
 	ErrQueueFull = errors.New("syslogger: 日志队列已满")
 )
 
-// Queue 持有模块独立 FIFO、固定发送任务及其累计计数。
+// Queue 持有模块独立 FIFO、固定发送任务及同步交付的接收截止和累计计数。
 type Queue struct {
-	mu        sync.Mutex
-	entries   chan *Entry
-	closing   bool
-	done      chan struct{}
-	ctx       context.Context
-	cancel    context.CancelFunc
-	transport transport
-	reporter  diagnostic.Reporter
-	identity  string
-	rejected  atomic.Uint64
-	failed    atomic.Uint64
-	accepted  atomic.Uint64
+	mu          sync.Mutex
+	entries     chan *Entry
+	closing     bool
+	done        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	syncSending sync.WaitGroup
+	transport   transport
+	reporter    diagnostic.Reporter
+	identity    string
+	rejected    atomic.Uint64
+	failed      atomic.Uint64
+	accepted    atomic.Uint64
 	// 活动窗口由现有队列锁保护，计数使用组件独立的原子量；磁盘维护只接收首次活动通知。
 	activityWake  chan<- struct{}
 	firstAccepted time.Time
@@ -44,7 +45,7 @@ type Queue struct {
 }
 
 // New 按调用方已确定的正数容量建立模块有界指针队列，连接在后台处理首条事件时创建。
-// activityWake 非 nil 时维护组件入队活动，首次活动只通知后台，调用线程不执行目录 I/O。
+// activityWake 非 nil 时维护组件接收活动，首次活动只通知后台，调用线程不执行目录 I/O。
 func New(capacity int, path, project, instance, component string, activityWake chan<- struct{}) *Queue {
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &Queue{
@@ -64,7 +65,7 @@ func New(capacity int, path, project, instance, component string, activityWake c
 	return q
 }
 
-// Reject 累计调用线程编码或生命周期检查阶段的拒收。
+// Reject 累计调用线程编码、上下文或生命周期检查阶段的拒收。
 func (q *Queue) Reject() { q.rejected.Add(1) }
 
 // Enqueue 立即接收或拒收，已有记录保持 FIFO。
@@ -78,20 +79,7 @@ func (q *Queue) Enqueue(entry *Entry) error {
 	q.pending.Add(1)
 	select {
 	case q.entries <- entry:
-		if q.activityWake != nil {
-			at := time.Now().UTC()
-			q.accepted.Add(1)
-			if q.firstAccepted.IsZero() {
-				q.firstAccepted = at
-			}
-			if q.lastAccepted.IsZero() {
-				select {
-				case q.activityWake <- struct{}{}:
-				default:
-				}
-			}
-			q.lastAccepted = at
-		}
+		q.recordActivity()
 		return nil
 	default:
 		q.pending.Add(-1)
@@ -100,7 +88,7 @@ func (q *Queue) Enqueue(entry *Entry) error {
 	}
 }
 
-// Counts 读取独立的拒收和实际后台发送失败累计值。
+// Counts 读取独立的拒收和实际发送失败累计值，包含异步及同步交付。
 func (q *Queue) Counts() (uint64, uint64) { return q.rejected.Load(), q.failed.Load() }
 
 // Stop 建立接收截止，关闭期限通过取消连接中断尚未完成的日志交付。
@@ -146,6 +134,8 @@ func (q *Queue) run() {
 	defer close(q.done)
 	defer q.cancel()
 	defer q.transport.close()
+	// 输入关闭后先等待已接收的同步调用，再发布完成；关闭期限仍可通过共享上下文中断它们。
+	defer q.syncSending.Wait()
 	for entry := range q.entries {
 		if q.ctx.Err() != nil {
 			q.abandoned++

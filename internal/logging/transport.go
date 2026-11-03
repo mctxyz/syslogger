@@ -14,7 +14,7 @@ import (
 	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
-// 本机 IPC 使用有限等待；业务线程只负责编码和入队。
+// 本机 IPC 的单次连接和写入均使用有限等待，同步交付还受调用上下文约束。
 const sendTimeout = time.Second
 
 type wireProtocol uint8

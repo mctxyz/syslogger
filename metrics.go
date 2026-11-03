@@ -19,8 +19,8 @@ var metricDefinitions = [...]struct {
 }{
 	{"syslogger_component_state", "组件健康状态：0=未知，1=健康，2=降级，3=不健康。", prometheus.GaugeValue},
 	{"syslogger_component_timestamp_seconds", "当前健康记录的汇报时间，单位为 Unix 秒，尚无汇报时为 0。", prometheus.GaugeValue},
-	{"syslogger_component_log_rejected_total", "入队前拒收的日志调用累计次数。", prometheus.CounterValue},
-	{"syslogger_component_log_send_failures_total", "后台发送失败的日志条目累计数。", prometheus.CounterValue},
+	{"syslogger_component_log_rejected_total", "接收前拒收的日志调用累计次数。", prometheus.CounterValue},
+	{"syslogger_component_log_send_failures_total", "异步及同步发送失败的日志条目累计数。", prometheus.CounterValue},
 }
 
 // componentSnapshot 是一次采集读取的组件健康事实及日志计数。

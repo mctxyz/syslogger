@@ -78,7 +78,7 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 			if componentIndex == len(instance.Components)-1 {
 				branch = "└── "
 			}
-			// 数量直接使用 uint64 十进制，最近入队时间沿用日志可读输出的系统时区与秒级格式。
+			// 数量直接使用 uint64 十进制，最近接收时间沿用日志可读输出的系统时区与秒级格式。
 			details := fmt.Sprintf("%d  %s", component.LogCount, component.LastActiveAt.Local().Format("2006-01-02 15:04:05"))
 			if component.Description != "" {
 				details += "  " + component.Description

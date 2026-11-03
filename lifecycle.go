@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Close 建立统一接收截止，以首次 ctx 限定日志排空，后续调用复用同次收尾。
+// Close 建立统一接收截止，以首次 ctx 限定日志排空及同步交付，后续调用复用同次收尾。
 // 文件系统及独立诊断输出的底层 I/O 可能继续，后续 ctx 只限定本次等待。
 func (m *Manager) Close(ctx context.Context) error {
 	if ctx == nil {

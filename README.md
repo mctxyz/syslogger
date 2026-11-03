@@ -83,7 +83,7 @@ manager := syslogger.SafeNew(syslogger.Config{
 
 ## 日志
 
-八级方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields Fields)`，无返回值，字段可传 nil。`Fields` 是以 `map[string]any` 为底层类型的结构化业务字段类型，调用方使用 `syslogger.Fields` 构造字段；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
+普通异步方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields Fields)`，无返回值，字段可传 nil。`Fields` 是以 `map[string]any` 为底层类型的结构化业务字段类型，调用方使用 `syslogger.Fields` 构造字段；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
 
 ```go
 rpc.Info("RPC 已连接", syslogger.Fields{
@@ -98,7 +98,7 @@ rpc.Healthy()
 
 正文实际为单行 JSON，时间为 UTC RFC3339Nano，等级为小写名称。顶层 error 字段使用 Error() 文本，nil 或空字段省略 fields。编码在调用线程完成，调用期间字段由业务保证无并发修改；返回后修改原字段不会改变已编码日志。出口使用 LOG_USER facility 和真实 severity，`SYSLOG_IDENTIFIER`／syslog tag 来自项目名；项目 tag 中的空白和控制字符规范化为下划线，JSON 身份保留原文。
 
-Linux 在首次后台连接时优先使用 `/run/systemd/journal/socket` 的原生 journal 协议，同时发送 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 三个独立原文身份字段，供 journal 索引检索；`MESSAGE` 保持上述完整 JSON 字节。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 继续拥有连接，沿用一秒连接／写入等待及关闭中断，业务调用线程只编码和入队。
+Linux 在建立连接时优先使用 `/run/systemd/journal/socket` 的原生 journal 协议，同时发送 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 三个独立原文身份字段，供 journal 索引检索；`MESSAGE` 保持上述完整 JSON 字节。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 拥有连接，连接和写入各使用一秒等待上限；普通异步调用线程只编码和入队。
 
 原生入口不可连接时继续发现本机 syslog 路径；其他平台沿用 syslog。显式 `SyslogSocketPath` 始终使用传统 syslog 协议，适用于已有转发入口及隔离测试。Linux 主机已有可访问的 journald 原生入口时，新增字段无需服务端注册或修改日志配置；设备的过滤、限流、留存和转发策略仍由部署方管理。
 
@@ -121,13 +121,33 @@ if err != nil {
 rpc.Info("组件已注册", nil)
 ```
 
-队满立即拒收新日志，更新拒收 Counter 并通过标准日志诊断，已接收记录保持 FIFO。发送成功只表示本机 socket 写入成功，中心接收和持久化由设备日志链路管理。
+普通队列满时立即拒收新日志，更新拒收 Counter 并通过标准日志诊断，已接收的队列记录保持 FIFO。发送成功只表示本机 socket 写入成功，中心接收和持久化由设备日志链路管理。
 
-编码失败、队满或管理器关闭后的日志调用通过标准库 `log.Printf` 输出独立诊断，并累计模块拒收次数；提交诊断按模块每秒最多输出一次，Counter 保留全部次数。后台连接或写入失败沿用独立标准日志诊断和发送失败 Counter，失败条目即放弃。连接恢复服务后续日志，不重放失败记录。本机连接及写入等待各受有限超时约束，业务前台仍承担编码和必要的标准日志输出成本，库不承诺硬实时调用上限。
+普通异步调用的编码失败、队满或管理器关闭后拒收，通过标准库 `log.Printf` 输出独立诊断，并累计模块拒收次数；提交诊断按模块每秒最多输出一次，Counter 保留全部次数。后台连接或写入失败沿用独立标准日志诊断和发送失败 Counter，失败条目即放弃。连接恢复服务后续日志，不重放失败记录。本机连接及写入等待各受有限超时约束，业务前台仍承担编码和必要的标准日志输出成本，库不承诺硬实时调用上限。
 
-空组件句柄及缺少管理器的组件通过标准日志输出原有句柄警告，下一行输出采用相同事件格式的单行 JSON，保留等级、时间、消息及业务字段。此时项目和实例身份使用空字符串，组件名称存在时保留；警告与事件使用同一次 `log.Printf` 输出。业务字段编码失败时保留句柄警告，并在下一行输出编码失败原因。
+普通异步方法在空组件句柄及缺少管理器时通过标准日志输出原有句柄警告，下一行输出采用相同事件格式的单行 JSON，保留等级、时间、消息及业务字段。此时项目和实例身份使用空字符串，组件名称存在时保留；警告与事件使用同一次 `log.Printf` 输出。业务字段编码失败时保留句柄警告，并在下一行输出编码失败原因。
 
-`SyslogSocketPath` 可指定部署或隔离测试的传统 syslog 路径。默认 Linux 先连接 journald 原生入口，再尝试 `/dev/log`、`/var/run/syslog`、`/var/run/log` 的 Unix datagram 和 stream；连接延迟到后台首次发送，同一组件复用成功连接，发送失败后在后续事件重新发现。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。
+`SyslogSocketPath` 可指定部署或隔离测试的传统 syslog 路径。默认 Linux 先连接 journald 原生入口，再尝试 `/dev/log`、`/var/run/syslog`、`/var/run/log` 的 Unix datagram 和 stream；异步连接延迟到后台首次发送，同一组件复用成功连接，发送失败后在后续事件重新发现。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。
+
+### 同步日志
+
+八个等级分别提供 `EmergencySync、AlertSync、CriticalSync、ErrorSync、WarningSync、NoticeSync、InfoSync、DebugSync`，签名统一为 `(ctx context.Context, message string, fields Fields) error`。同步方法使用相同身份、JSON 编码和 journal／syslog 协议，每次建立独立短连接，在当前调用中完成发送尝试并关闭连接，适用于退出前的关键事件。
+
+同步调用直接发送，普通队列容量不影响其接收；它可以先于积压记录发送，并发同步调用之间也不承诺顺序。`ctx` 必须非 nil，可取消连接和写入；未设置更短期限时，连接和写入仍各受一秒上限约束。JSON 编码及匿名内存文件的准备不承诺硬实时取消。返回 nil 仅表示写入本机 socket，不代表 journald 持久化或中心接收。
+
+编码、无效上下文、预先取消或关闭拒收累计接收前拒收次数；通过接收检查后的连接、写入或取消失败累计发送失败次数。同步调用直接返回错误，由业务处理诊断和退出。关闭后的调用返回 `ErrClosed`；已接收调用纳入 `Close` 等待，关闭期限到达时中断同步发送。普通异步方法和业务健康状态保持原有行为。
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+err := rpc.ErrorSync(ctx, "无法继续运行", syslogger.Fields{"error": cause})
+cancel()
+if err != nil {
+    fmt.Fprintf(os.Stderr, "无法继续运行；日志发送失败：%v\n", err)
+}
+os.Exit(1)
+```
+
+退出由业务显式调用；`os.Exit` 不执行 defer，需要完整收尾时，应在退出前使用新的有效上下文调用 `manager.Close`。同步调用只交付本条日志，不负责排空普通队列或立即保存目录活动。
 
 ### 日志检索
 
@@ -169,17 +189,17 @@ if err != nil {
 rpc.Info("RPC 已连接", nil)
 ```
 
-组件首次有日志成功入队时通知后台建立目录记录；管理器初始化、组件注册及健康报告保持各自职责，名称目录由实际入队活动建立。容错初始化产生的结构化诊断使用 `syslogger_manager`，同样按成功入队进入目录。描述供目录展示，日志及指标继续使用原有身份。
+组件首次成功接收日志时通知后台建立目录记录，接收包含异步入队和同步开始发送；管理器初始化、组件注册及健康报告保持各自职责，名称目录由实际接收活动建立。容错初始化产生的结构化诊断使用 `syslogger_manager`，同样按成功入队进入目录。描述供目录展示，日志及指标继续使用原有身份。
 
-清单按项目和实例保存 JSON，项目目录名为项目原文的 SHA-256 十六进制摘要，实例文件名为实例 ID 的 SHA-256 十六进制摘要加 `.json`。实例保存 `created_at`；组件保存 `name`、`description`、`created_at`、`last_active_at` 和 `log_count`，存储时间使用 UTC。固定长度路径兼容现有身份中的斜杠、空白及长项目名，CLI 用身份原文组织目录，组件名后依次展示累计入队数量、上次日志时间及描述；可读时间按设备系统时区显示为 `YYYY-MM-DD HH:MM:SS`，JSON 输出保留原有 UTC 时间。
+清单按项目和实例保存 JSON，项目目录名为项目原文的 SHA-256 十六进制摘要，实例文件名为实例 ID 的 SHA-256 十六进制摘要加 `.json`。实例保存 `created_at`；组件保存 `name`、`description`、`created_at`、`last_active_at` 和 `log_count`，存储时间使用 UTC。固定长度路径兼容现有身份中的斜杠、空白及长项目名，CLI 用身份原文组织目录，组件名后依次展示累计接收数量、上次日志时间及描述；可读时间按设备系统时区显示为 `YYYY-MM-DD HH:MM:SS`，JSON 输出保留原有 UTC 时间。
 
-每个组件通过独立的 `atomic.Uint64` 累计成功入队增量，后台每 10 分钟取走活动窗口并合并文件中的历史数量；失败窗口合回内存，下个周期继续处理。文件中的 `log_count` 表示从该组件记录创建开始的 SDK 接收量，类型为 `uint64`，达到最大值后自然回绕为零。后续发送失败或关闭时放弃的日志仍在接收量内；编码失败、队满或关闭拒收等未入队日志不计。该数量与 journal 当前留存条数分别解释。
+每个组件通过独立的 `atomic.Uint64` 累计成功接收增量，后台每 10 分钟取走活动窗口并合并文件中的历史数量；失败窗口合回内存，下个周期继续处理。文件中的 `log_count` 表示从该组件记录创建开始的 SDK 接收量，包含异步入队及同步开始发送，类型为 `uint64`，达到最大值后自然回绕为零。后续发送失败或关闭时放弃的日志仍在接收量内；编码、上下文、队满或关闭等接收前拒绝不计。该数量与 journal 当前留存条数分别解释。
 
 根目录和项目目录为 `0777`，JSON 文件及项目 `.catalog.lock` 为 `0666`，面向受信本机环境公开读写。发布和清理通过 [gofrs/flock v0.12.1](https://github.com/gofrs/flock/tree/v0.12.1) 协调项目文件锁，在锁内读取、合并增量并使用同目录临时文件原子替换；同身份多进程的累计量合并保存。项目锁文件保持稳定，日志调用线程只维护内存活动，文件 I/O 在后台执行。目录发布或清理失败通过标准日志诊断，组件注册、健康状态及业务关闭结果沿用原契约。
 
-`Close` 在日志队列收尾后完成最终同步并停止目录后台任务，保留未过期历史记录；异常退出可能丢失最近一次成功同步后尚未保存的增量。重启继续合并已有计数和创建时间。组件按最后一次成功入队时间判断一年有效期，轮询本身不续期，其他组件的活动也不为静默组件续期；全部组件超过物理清理窗口后删除实例 JSON。宽限期内记录继续存续并合并新增数量，过期记录实际移除后再次有日志时按新记录累计。
+`Close` 在日志队列及同步调用收尾后完成最终同步并停止目录后台任务，保留未过期历史记录；异常退出可能丢失最近一次成功同步后尚未保存的增量。重启继续合并已有计数和创建时间。组件按最后一次成功接收时间判断一年有效期，轮询本身不续期，其他组件的活动也不为静默组件续期；全部组件超过物理清理窗口后删除实例 JSON。宽限期内记录继续存续并合并新增数量，过期记录实际移除后再次有日志时按新记录累计。
 
-SDK 每 10 分钟清理过期记录，物理清理额外保留一个同步周期，给过期前已成功入队、尚未刷盘的活动保留合并机会；合并按实际入队时刻判断生命周期是否连续。全部接入应用退出后暂停物理清理，后续 SDK 运行时继续。CLI 的 `--list` 始终按一年活动期限过滤过期项，物理宽限不延长显示期限；名称目录用于选择历史日志过滤条件，journal 日志仍按其自身留存范围查询，也可手动指定身份。目录历史数据与旧目录由部署方自行处理。
+SDK 每 10 分钟清理过期记录，物理清理额外保留一个同步周期，给过期前已成功接收、尚未刷盘的活动保留合并机会；合并按实际接收时刻判断生命周期是否连续。全部接入应用退出后暂停物理清理，后续 SDK 运行时继续。CLI 的 `--list` 始终按一年活动期限过滤过期项，物理宽限不延长显示期限；名称目录用于选择历史日志过滤条件，journal 日志仍按其自身留存范围查询，也可手动指定身份。目录历史数据与旧目录由部署方自行处理。
 
 ## 健康与指标
 
@@ -212,8 +232,8 @@ manager := syslogger.SafeNew(syslogger.Config{
 | --- | --- | --- |
 | `syslogger_component_state` | Gauge | 当前四态数值 |
 | `syslogger_component_timestamp_seconds` | Gauge | 当前有效健康记录的 Unix 整数秒，尚无健康报告时为 0 |
-| `syslogger_component_log_rejected_total` | Counter | 模块入队前拒收的调用累计次数 |
-| `syslogger_component_log_send_failures_total` | Counter | 模块后台发送失败的条目累计数 |
+| `syslogger_component_log_rejected_total` | Counter | 模块接收前拒收的调用累计次数 |
+| `syslogger_component_log_send_failures_total` | Counter | 模块异步及同步发送失败的条目累计数 |
 
 内置样本带上述三个身份标签。业务组件输出四条样本，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
 
@@ -286,7 +306,7 @@ fileConfig := syslogger.FileConfig{
 
 ## 关闭与验证
 
-首次 `Close(ctx)` 建立接收截止，并以该上下文限制日志排空；到期取消连接、释放积压记录并反馈未完成交付。只关闭库拥有的 HTTP 服务器，外部服务持有的 syslogger Handler 随后返回 503。已成功启动的文件出口串行写入最终快照并保留文件，未启动的出口保持原状态。最终快照之后注销自身 Collector，业务 Collector 和外部 promhttp 服务继续由调用方管理。重复 Close 复用收尾结果，后续 ctx 只限制本次等待。Collector 采集、文件系统和独立错误输出的底层 I/O 不承诺硬实时可取消。
+首次 `Close(ctx)` 建立接收截止，并以该上下文限制日志排空及已接收的同步发送；到期取消连接、释放积压记录并反馈未完成交付。只关闭库拥有的 HTTP 服务器，外部服务持有的 syslogger Handler 随后返回 503。已成功启动的文件出口串行写入最终快照并保留文件，未启动的出口保持原状态。最终快照之后注销自身 Collector，业务 Collector 和外部 promhttp 服务继续由调用方管理。重复 Close 复用收尾结果，后续 ctx 只限制本次等待。Collector 采集、文件系统和独立错误输出的底层 I/O 不承诺硬实时可取消。
 
 ```sh
 go test ./...

@@ -2,14 +2,33 @@ package logging
 
 import "time"
 
-// Activity 是一个尚未持久化的成功入队窗口，数量按 uint64 自然回绕。
+// Activity 是一个尚未持久化的成功接收窗口，数量按 uint64 自然回绕。
 type Activity struct {
 	Count   uint64
 	FirstAt time.Time
 	LastAt  time.Time
 }
 
-// TakeActivity 取走当前窗口，后续入队在新窗口累计，文件 I/O 无需持有队列锁。
+// recordActivity 在队列锁内累计已接收的异步入队或同步发送活动。
+func (q *Queue) recordActivity() {
+	if q.activityWake == nil {
+		return
+	}
+	at := time.Now().UTC()
+	q.accepted.Add(1)
+	if q.firstAccepted.IsZero() {
+		q.firstAccepted = at
+	}
+	if q.lastAccepted.IsZero() {
+		select {
+		case q.activityWake <- struct{}{}:
+		default:
+		}
+	}
+	q.lastAccepted = at
+}
+
+// TakeActivity 取走当前窗口，后续接收在新窗口累计，文件 I/O 无需持有队列锁。
 func (q *Queue) TakeActivity() Activity {
 	q.mu.Lock()
 	defer q.mu.Unlock()
