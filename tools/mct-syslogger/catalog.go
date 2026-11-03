@@ -78,7 +78,12 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 			if componentIndex == len(instance.Components)-1 {
 				branch = "└── "
 			}
-			label := catalogLabel(component.Name, component.Description, colourComponent, opts.colour)
+			// 数量直接使用 uint64 十进制，最近入队时间沿用日志可读输出的系统时区与秒级格式。
+			details := fmt.Sprintf("%d  %s", component.LogCount, component.LastActiveAt.Local().Format("2006-01-02 15:04:05"))
+			if component.Description != "" {
+				details += "  " + component.Description
+			}
+			label := catalogLabel(component.Name, details, colourComponent, opts.colour)
 			if _, err := fmt.Fprintln(output, projectPrefix+prefix+branch+label); err != nil {
 				return err
 			}
@@ -87,14 +92,14 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 	return nil
 }
 
-// catalogLabel 复用日志输出的控制字符转义，描述与身份在树形目录中保持单行。
-func catalogLabel(name, description, style string, colour bool) string {
+// catalogLabel 复用日志输出的控制字符转义，身份与补充信息在树形目录中保持单行。
+func catalogLabel(name, details, style string, colour bool) string {
 	label := escaped(name)
 	if colour {
 		label = colourText(label, style)
 	}
-	if description != "" {
-		label += "  " + escaped(description)
+	if details != "" {
+		label += "  " + escaped(details)
 	}
 	return label
 }

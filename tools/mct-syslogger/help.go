@@ -87,6 +87,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   名称目录（--list）
 `)
 	fmt.Fprintf(output, "    读取 %s，按 项目 → 实例 → 组件 展示名称及描述。\n", catalog.Root)
+	fmt.Fprintln(output, "    组件名后依次显示累计数量、上次日志时间和描述；时间使用系统时区，格式为 YYYY-MM-DD HH:MM:SS。")
 	fmt.Fprintln(output, "    由启用 CatalogEnabled 的 SDK 按成功入队日志建立，逐组件过滤一年未活跃项。")
 	fmt.Fprintln(output, "    SDK 每 10 分钟同步并在关闭时最终保存；--json 包含创建时间、活跃时间和累计入队量。")
 

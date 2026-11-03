@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,17 +68,18 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	if err := showCatalog(store, testOptions(t, "--list"), &output); err != nil {
 		t.Fatal(err)
 	}
-	want := `mct-syslogger
+	timestamp := at.Local().Format("2006-01-02 15:04:05")
+	want := fmt.Sprintf(`mct-syslogger
 ├── a
 │   ├── local  主网实例
-│   │   ├── rpc  区块获取
-│   │   └── worker  后台任务
+│   │   ├── rpc  1  %[1]s  区块获取
+│   │   └── worker  1  %[1]s  后台任务
 │   └── other
-│       └── worker  后台任务
+│       └── worker  1  %[1]s  后台任务
 └── b
     └── local  B 实例
-        └── worker
-`
+        └── worker  1  %[1]s
+`, timestamp)
 	if output.String() != want {
 		t.Fatalf("目录树不符:\n%s", output.String())
 	}
@@ -83,11 +87,11 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	if err := showCatalog(store, testOptions(t, "--list", "-p", "a", "-i", "local", "-c", "rpc"), &output); err != nil {
 		t.Fatal(err)
 	}
-	want = `mct-syslogger
+	want = fmt.Sprintf(`mct-syslogger
 └── a
     └── local  主网实例
-        └── rpc  区块获取
-`
+        └── rpc  1  %s  区块获取
+`, timestamp)
 	if output.String() != want {
 		t.Fatalf("单项目筛选后的目录树不符:\n%s", output.String())
 	}
@@ -111,6 +115,69 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	output.Reset()
 	if err := showCatalog(store, testOptions(t, "--list", "-c", "absent"), &output); err != nil || output.Len() != 0 {
 		t.Fatalf("无匹配组件时应保持空输出: %q, %v", output.String(), err)
+	}
+}
+
+func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
+	now := time.Now().UTC()
+	at := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 1, 2, 345678901, time.UTC)
+	store := catalog.Store{Root: t.TempDir()}
+	components := []catalog.Component{
+		{Name: "zero", CreatedAt: at, LastActiveAt: at, LogCount: 0},
+		{Name: "maximum", Description: "RPC\t获取", CreatedAt: at, LastActiveAt: at, LogCount: ^uint64(0)},
+	}
+	if err := store.Merge(catalog.Instance{Project: "p", InstanceID: "i", Components: components}, now); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, zone := range []struct {
+		name   string
+		offset int
+	}{
+		{name: "UTC"},
+		{name: "east", offset: 8 * 60 * 60},
+		{name: "west", offset: -5 * 60 * 60},
+	} {
+		t.Run(zone.name, func(t *testing.T) {
+			original := time.Local
+			time.Local = time.FixedZone(zone.name, zone.offset)
+			t.Cleanup(func() {
+				time.Local = original
+			})
+			timestamp := at.UTC().Add(time.Duration(zone.offset) * time.Second).Format("2006-01-02 15:04:05")
+			for _, colour := range []bool{false, true} {
+				var output bytes.Buffer
+				opts := testOptions(t, "--list")
+				opts.colour = colour
+				if err := showCatalog(store, opts, &output); err != nil {
+					t.Fatal(err)
+				}
+				for _, component := range components {
+					name := component.Name
+					if colour {
+						name = colourComponent + name + colourReset
+					}
+					want := name + "  " + strconv.FormatUint(component.LogCount, 10) + "  " + timestamp
+					if component.Description != "" {
+						want += `  RPC\t获取`
+					}
+					if !strings.Contains(output.String(), want+"\n") {
+						t.Fatalf("组件数量、时间格式、时区或描述不符: want=%q got=%q", want, output.String())
+					}
+				}
+			}
+			var output bytes.Buffer
+			if err := showCatalog(store, testOptions(t, "--list", "--json", "--colour"), &output); err != nil {
+				t.Fatal(err)
+			}
+			var decoded []catalog.Instance
+			if err := json.Unmarshal(output.Bytes(), &decoded); err != nil || !reflect.DeepEqual(decoded, stored) {
+				t.Fatalf("可读显示格式影响了 JSON 目录数据: %s, %v", output.String(), err)
+			}
+		})
 	}
 }
 

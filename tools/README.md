@@ -58,14 +58,16 @@ slog --list --json
 mct-syslogger
 ├── contract-listener
 │   └── mainnet-a  主网事件监听
-│       ├── rpc  区块与日志获取
-│       └── worker  事件处理
+│       ├── rpc  123  2026-11-03 14:38:15  区块与日志获取
+│       └── worker  42  2026-11-03 14:38:16  事件处理
 └── other-project
     └── main  后台任务服务
-        └── worker  任务处理
+        └── worker  8  2026-11-03 14:37:00  任务处理
 ```
 
-树形目录以 `mct-syslogger` 为统一展示根节点，其下依次为项目、实例和组件，并按名称排序。`-p`、`-i`、`-c` 使用原文精确匹配，同类重复取 OR，不同条件取 AND；指定组件筛选后只显示匹配组件及其所属实例。`--json` 输出实例对象数组，包含 `project`、`instance_id`、`instance_description`、`created_at` 和 `components`；每个组件包含 `name`、`description`、`created_at`、`last_active_at` 和 `log_count`。时间为 UTC，计数以 JSON 整数输出，消费方应使用可保留 `uint64` 精度的类型。
+树形目录以 `mct-syslogger` 为统一展示根节点，其下依次为项目、实例和组件，并按名称排序。组件行依次显示名称、累计成功入队数量、上次日志成功入队时间和描述；数量使用完整十进制，时间按设备系统时区显示为 `YYYY-MM-DD HH:MM:SS`。数值来自最近一次成功同步的目录记录，常规周期同步期间可能滞后于内存活动。
+
+`-p`、`-i`、`-c` 使用原文精确匹配，同类重复取 OR，不同条件取 AND；指定组件筛选后只显示匹配组件及其所属实例。`--json` 输出实例对象数组，包含 `project`、`instance_id`、`instance_description`、`created_at` 和 `components`；每个组件包含 `name`、`description`、`created_at`、`last_active_at` 和 `log_count`。JSON 时间保持 UTC，计数以 JSON 整数输出，消费方应使用可保留 `uint64` 精度的类型。
 
 目录查询直接读取固定路径，与各进程的 `TMPDIR` 无关，也可在未安装 `journalctl` 时使用。目录尚未创建或筛选无结果时正常返回空列表；JSON 格式错误和实际文件读取失败明确报错。目录模式只接受身份筛选、`--json` 和 `--colour`，日志时间、等级、内容、条数和跟踪参数用于日志查询模式。
 
