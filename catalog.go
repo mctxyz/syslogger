@@ -1,13 +1,40 @@
 package syslogger
 
 import (
-	"sort"
+	"time"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
 	"github.com/mctxyz/syslogger/internal/diagnostic"
+	"github.com/mctxyz/syslogger/internal/logging"
 )
 
-// publishCatalog 串行读取最新组件集合后发布，文件 I/O 在集合锁外执行。
+func (m *Manager) startCatalog() {
+	if m.catalog != nil {
+		go m.runCatalog()
+	}
+}
+
+func (m *Manager) runCatalog() {
+	defer close(m.catalogDone)
+	defer m.publishCatalog()
+	ticker := time.NewTicker(catalog.SyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.catalogWake:
+			m.publishCatalog()
+		case <-ticker.C:
+			m.publishCatalog()
+			if err := m.catalog.Prune(time.Now().UTC()); err != nil {
+				m.catalogReporter.Printf("project=%q instance_id=%q: 清理过期日志名称目录失败: %v", m.id.Project, m.id.InstanceID, err)
+			}
+		case <-m.catalogStop:
+			return
+		}
+	}
+}
+
+// publishCatalog 取走组件入队窗口后在集合锁外合并写入，失败时恢复窗口供下周期同步。
 func (m *Manager) publishCatalog() {
 	if m.catalog == nil {
 		return
@@ -21,23 +48,39 @@ func (m *Manager) publishCatalog() {
 		InstanceDescription: m.cfg.InstanceDescription,
 		Components:          make([]catalog.Component, 0, len(m.components)+1),
 	}
-	if m.diagnostic != nil || m.startupLogs != nil {
+	type window struct {
+		queue    *logging.Queue
+		activity logging.Activity
+	}
+	var windows []window
+	collect := func(queue *logging.Queue, name, description string) {
+		activity := queue.TakeActivity()
+		if activity.FirstAt.IsZero() {
+			return
+		}
+		windows = append(windows, window{queue: queue, activity: activity})
 		instance.Components = append(instance.Components, catalog.Component{
-			Name:        diagnostic.ComponentName,
-			Description: "管理器初始化与组件注册诊断",
+			Name:         name,
+			Description:  description,
+			CreatedAt:    activity.FirstAt,
+			LastActiveAt: activity.LastAt,
+			LogCount:     activity.Count,
 		})
+	}
+	if m.startupLogs != nil {
+		collect(m.startupLogs, diagnostic.ComponentName, "管理器初始化与组件注册诊断")
 	}
 	for _, component := range m.components {
-		instance.Components = append(instance.Components, catalog.Component{
-			Name:        component.name,
-			Description: component.description,
-		})
+		collect(component.logs, component.name, component.description)
 	}
 	m.mu.RUnlock()
-	sort.Slice(instance.Components, func(i, j int) bool {
-		return instance.Components[i].Name < instance.Components[j].Name
-	})
-	if err := m.catalog.Write(instance); err != nil {
+	if len(windows) == 0 {
+		return
+	}
+	if err := m.catalog.Merge(instance, time.Now().UTC()); err != nil {
+		for _, window := range windows {
+			window.queue.RestoreActivity(window.activity)
+		}
 		m.catalogReporter.Printf("project=%q instance_id=%q: 发布日志名称目录失败: %v", m.id.Project, m.id.InstanceID, err)
 	}
 }

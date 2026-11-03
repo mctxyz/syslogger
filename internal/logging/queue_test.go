@@ -28,7 +28,7 @@ func TestQueueFullPreservesFIFO(t *testing.T) {
 
 func TestQueueCapacity(t *testing.T) {
 	for _, capacity := range []int{1, 64, 512, 4095, 4096} {
-		q := New(capacity, "", "demo", "common", "rpc")
+		q := New(capacity, "", "demo", "common", "rpc", nil)
 		if cap(q.entries) != capacity {
 			t.Fatalf("容量 %d 实际为 %d", capacity, cap(q.entries))
 		}
@@ -51,12 +51,14 @@ func TestCloseInterruptsBackpressureAndReleasesQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer receiver.Close()
-	q := New(64, path, "demo", "common", "rpc")
+	q := New(64, path, "demo", "common", "rpc", make(chan struct{}, 1))
 	entry := &Entry{Severity: Info, Body: []byte(strings.Repeat("x", 32*1024))}
+	var accepted uint64
 	for i := 0; i < 1000; i++ {
 		if errors.Is(q.Enqueue(entry), ErrQueueFull) {
 			break
 		}
+		accepted++
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -77,6 +79,9 @@ func TestCloseInterruptsBackpressureAndReleasesQueue(t *testing.T) {
 	if !errors.Is(q.Enqueue(entry), ErrClosed) {
 		t.Fatal("关闭后继续接收")
 	}
+	if activity := q.TakeActivity(); activity.Count != accepted {
+		t.Fatalf("关闭放弃或关闭拒收改变了累计接收量: got=%d want=%d", activity.Count, accepted)
+	}
 }
 
 func TestUnixStreamFallbackAndFraming(t *testing.T) {
@@ -91,7 +96,7 @@ func TestUnixStreamFallbackAndFraming(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	q := New(8, path, "demo", "common", "rpc")
+	q := New(8, path, "demo", "common", "rpc", nil)
 	if err := q.Enqueue(&Entry{Severity: Error, Body: []byte(`{"message":"first"}`)}); err != nil {
 		t.Fatal(err)
 	}

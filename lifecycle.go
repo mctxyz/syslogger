@@ -81,6 +81,11 @@ func (m *Manager) finish(ctx context.Context, components []*Component) {
 			errs = append(errs, err)
 		}
 	}
+	if m.catalog != nil {
+		// 日志接收和队列收尾均已结束，后台任务完成最后一次目录同步后退出。
+		close(m.catalogStop)
+		<-m.catalogDone
+	}
 	// 最终快照完成后释放自身注册，业务 Collector 继续由共享表的持有方管理。
 	m.registry.Unregister(m)
 	if len(errs) == 1 {

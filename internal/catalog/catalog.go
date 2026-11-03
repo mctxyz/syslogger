@@ -5,23 +5,46 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"time"
 )
 
 // Root 是 SDK 和日志工具共同使用的固定目录，与进程 TMPDIR 无关。
-const Root = "/tmp/mct-syslogger"
+const Root = "/var/lib/mct-syslogger"
 
-// Component 保存组件的日志身份及供用户选择时阅读的描述。
+// SyncInterval 是 SDK 批量同步周期，也是物理清理为未同步活动保留的宽限窗口。
+const SyncInterval = 10 * time.Minute
+
+// Component 保存组件日志身份、描述及当前记录生命周期内的成功入队统计。
 type Component struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	// LastActiveAt 来自实际成功入队时刻，后台检查本身不更新它。
+	LastActiveAt time.Time `json:"last_active_at"`
+	// LogCount 保存累计接收量，后续发送结果不回减，溢出自然回绕。
+	LogCount uint64 `json:"log_count"`
 }
 
-// Instance 是某个实例最近一次发布的完整日志名称目录。
+// Instance 保存实例的历史日志名称；每个组件维护自己的活动时间与累计接收量。
 type Instance struct {
 	Project             string      `json:"project"`
 	InstanceID          string      `json:"instance_id"`
 	InstanceDescription string      `json:"instance_description"`
+	CreatedAt           time.Time   `json:"created_at"`
 	Components          []Component `json:"components"`
+}
+
+// Active 按最后一次成功入队时间保留一年内的组件，展示使用当前时间，物理清理额外保留同步窗口。
+func (instance Instance) Active(now time.Time) Instance {
+	cutoff := now.AddDate(-1, 0, 0)
+	components := make([]Component, 0, len(instance.Components))
+	for _, component := range instance.Components {
+		if !component.LastActiveAt.IsZero() && !component.LastActiveAt.Before(cutoff) {
+			components = append(components, component)
+		}
+	}
+	instance.Components = components
+	return instance
 }
 
 // Store 负责给定根目录中的目录文件，发布与读取共用相同路径约定。

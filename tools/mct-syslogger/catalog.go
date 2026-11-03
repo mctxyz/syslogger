@@ -4,18 +4,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
 )
 
-// showCatalog 读取静态名称目录，按原文身份筛选，查询过程独立于 journal。
+// showCatalog 读取名称目录并过滤一年未活跃组件，身份筛选与展示独立于 journal。
 func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 	instances, err := store.Read()
 	if err != nil {
 		return err
 	}
 	selected := make([]catalog.Instance, 0, len(instances))
+	now := time.Now().UTC()
 	for _, instance := range instances {
+		instance = instance.Active(now)
+		if len(instance.Components) == 0 {
+			continue
+		}
 		if len(opts.projects) > 0 && !contains(opts.projects, instance.Project) {
 			continue
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
 )
@@ -19,17 +20,22 @@ var (
 
 // Queue 持有模块独立 FIFO、固定发送任务及其累计计数。
 type Queue struct {
-	mu            sync.Mutex
-	entries       chan *Entry
-	closing       bool
-	done          chan struct{}
-	ctx           context.Context
-	cancel        context.CancelFunc
-	transport     transport
-	reporter      diagnostic.Reporter
-	identity      string
-	rejected      atomic.Uint64
-	failed        atomic.Uint64
+	mu        sync.Mutex
+	entries   chan *Entry
+	closing   bool
+	done      chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	transport transport
+	reporter  diagnostic.Reporter
+	identity  string
+	rejected  atomic.Uint64
+	failed    atomic.Uint64
+	accepted  atomic.Uint64
+	// 活动窗口由现有队列锁保护，计数使用组件独立的原子量；磁盘维护只接收首次活动通知。
+	activityWake  chan<- struct{}
+	firstAccepted time.Time
+	lastAccepted  time.Time
 	pending       atomic.Int64
 	abandoned     uint64
 	closeFailures uint64
@@ -37,10 +43,18 @@ type Queue struct {
 }
 
 // New 按调用方已确定的正数容量建立模块有界指针队列，连接在后台处理首条事件时创建。
-func New(capacity int, path, project, instance, component string) *Queue {
+// activityWake 非 nil 时维护组件入队活动，首次活动只通知后台，调用线程不执行目录 I/O。
+func New(capacity int, path, project, instance, component string, activityWake chan<- struct{}) *Queue {
 	ctx, cancel := context.WithCancel(context.Background())
-	q := &Queue{entries: make(chan *Entry, capacity), done: make(chan struct{}), ctx: ctx, cancel: cancel,
-		transport: transport{path: path, tag: project}, identity: fmt.Sprintf("project=%q instance_id=%q component=%q", project, instance, component)}
+	q := &Queue{
+		entries:      make(chan *Entry, capacity),
+		done:         make(chan struct{}),
+		ctx:          ctx,
+		cancel:       cancel,
+		transport:    transport{path: path, tag: project},
+		identity:     fmt.Sprintf("project=%q instance_id=%q component=%q", project, instance, component),
+		activityWake: activityWake,
+	}
 	go q.run()
 	return q
 }
@@ -59,6 +73,20 @@ func (q *Queue) Enqueue(entry *Entry) error {
 	q.pending.Add(1)
 	select {
 	case q.entries <- entry:
+		if q.activityWake != nil {
+			at := time.Now().UTC()
+			q.accepted.Add(1)
+			if q.firstAccepted.IsZero() {
+				q.firstAccepted = at
+			}
+			if q.lastAccepted.IsZero() {
+				select {
+				case q.activityWake <- struct{}{}:
+				default:
+				}
+			}
+			q.lastAccepted = at
+		}
 		return nil
 	default:
 		q.pending.Add(-1)

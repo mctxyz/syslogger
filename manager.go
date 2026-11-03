@@ -35,6 +35,9 @@ type Manager struct {
 	catalogReporter      diagnostic.Reporter
 	catalog              *catalog.Store
 	catalogMu            sync.Mutex
+	catalogWake          chan struct{}
+	catalogStop          chan struct{}
+	catalogDone          chan struct{}
 	registry             *prometheus.Registry
 	metricDescs          [len(metricDefinitions)]*prometheus.Desc
 	frozen               bool
@@ -50,7 +53,7 @@ type Manager struct {
 	finalErr             error
 }
 
-// New 校验配置并注册内置 Collector，启用日志名称目录时发布初始清单。
+// New 校验配置并注册内置 Collector，启用名称目录时建立后台维护任务。
 // 日志交付及指标出口的文件和 socket I/O 由各自的实际出口执行。
 func New(cfg Config) (*Manager, error) {
 	cfg, err := cfg.normalized()
@@ -61,7 +64,7 @@ func New(cfg Config) (*Manager, error) {
 	if err := m.registry.Register(m); err != nil {
 		return nil, fmt.Errorf("syslogger: 注册内置指标: %w", err)
 	}
-	m.publishCatalog()
+	m.startCatalog()
 	return m, nil
 }
 
@@ -81,6 +84,9 @@ func newManager(cfg Config) *Manager {
 	}
 	if cfg.CatalogEnabled {
 		m.catalog = &catalog.Store{Root: catalog.Root}
+		m.catalogWake = make(chan struct{}, 1)
+		m.catalogStop = make(chan struct{})
+		m.catalogDone = make(chan struct{})
 	}
 	m.registry = cfg.Registry
 	if m.registry == nil {
@@ -109,7 +115,7 @@ type ComponentConfig struct {
 	QueueCapacity int
 }
 
-// Register 根据配置建立独立模块，成功后更新已启用的日志名称目录。
+// Register 根据配置建立独立模块，名称目录由该模块后续成功入队的日志建立。
 // 模块集合在交出 Handler、开始启动指标出口或首次 Registry 采集时固定。
 func (m *Manager) Register(cfg ComponentConfig) (component *Component, err error) {
 	name, queueCapacity := cfg.Name, cfg.QueueCapacity
@@ -126,8 +132,6 @@ func (m *Manager) Register(cfg ComponentConfig) (component *Component, err error
 		m.mu.Unlock()
 		if err != nil {
 			m.registrationReporter.Printf("project=%q instance_id=%q: 注册组件失败: %v", m.id.Project, m.id.InstanceID, err)
-		} else {
-			m.publishCatalog()
 		}
 	}()
 	if m.closing || m.frozen {
@@ -159,6 +163,6 @@ func (m *Manager) Register(cfg ComponentConfig) (component *Component, err error
 	if m.cfg.StateEnabled {
 		m.diagnostic.Registered(time.Now())
 	}
-	component.logs = logging.New(queueCapacity, m.cfg.SyslogSocketPath, m.id.Project, m.id.InstanceID, name)
+	component.logs = logging.New(queueCapacity, m.cfg.SyslogSocketPath, m.id.Project, m.id.InstanceID, name, m.catalogWake)
 	return component, nil
 }

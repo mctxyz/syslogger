@@ -10,20 +10,14 @@ import (
 	"strings"
 )
 
-// Write 原子替换一个实例的完整清单，并保证目录及文件可供其他用户维护。
-func (s Store) Write(instance Instance) error {
+// write 在项目文件锁内原子替换实例清单，临时文件与目标位于同一目录。
+func (s Store) write(instance Instance) error {
 	data, err := json.MarshalIndent(instance, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
 	path := s.Path(instance.Project, instance.InstanceID)
-	if err := sharedDirectory(s.Root); err != nil {
-		return err
-	}
-	if err := sharedDirectory(filepath.Dir(path)); err != nil {
-		return err
-	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".catalog-*")
 	if err != nil {
 		return err
@@ -82,16 +76,13 @@ func (s Store) Read() ([]Instance, error) {
 				continue
 			}
 			path := filepath.Join(directory, file.Name())
-			data, err := os.ReadFile(path)
+			instance, err := readInstance(path)
+			if errors.Is(err, os.ErrNotExist) {
+				// 清理任务可在目录枚举之后删除过期文件，读取方跳过已消失的记录。
+				continue
+			}
 			if err != nil {
 				return nil, err
-			}
-			var instance Instance
-			if err := json.Unmarshal(data, &instance); err != nil {
-				return nil, fmt.Errorf("读取日志目录 %s: %w", path, err)
-			}
-			if instance.Project == "" || instance.InstanceID == "" {
-				return nil, fmt.Errorf("日志目录 %s 缺少项目或实例身份", path)
 			}
 			sort.Slice(instance.Components, func(i, j int) bool {
 				return instance.Components[i].Name < instance.Components[j].Name
@@ -106,4 +97,19 @@ func (s Store) Read() ([]Instance, error) {
 		return instances[i].InstanceID < instances[j].InstanceID
 	})
 	return instances, nil
+}
+
+func readInstance(path string) (Instance, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Instance{}, err
+	}
+	var instance Instance
+	if err := json.Unmarshal(data, &instance); err != nil {
+		return Instance{}, fmt.Errorf("读取日志目录 %s: %w", path, err)
+	}
+	if instance.Project == "" || instance.InstanceID == "" {
+		return Instance{}, fmt.Errorf("日志目录 %s 缺少项目或实例身份", path)
+	}
+	return instance, nil
 }

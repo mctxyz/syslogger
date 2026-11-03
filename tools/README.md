@@ -37,7 +37,7 @@ sudo usermod -aG systemd-journal username
 
 ## 查看项目、实例与组件目录
 
-业务开启 `Config.CatalogEnabled` 后，syslogger 向 `/tmp/mct-syslogger` 发布目录。`Config.InstanceDescription` 描述实例用途，组件通过 `Register(ComponentConfig)` 提供名称及 `Description`。目录开关默认关闭，与日志及指标出口独立。
+业务开启 `Config.CatalogEnabled` 后，syslogger 向 `/var/lib/mct-syslogger` 发布目录。部署方准备该目录及接入应用写权限，并配套更新 SDK 和 CLI。`Config.InstanceDescription` 描述实例用途，组件通过 `Register(ComponentConfig)` 提供名称及 `Description`。目录开关默认关闭，与日志及指标出口独立。
 
 ```sh
 # 查看全部项目、实例和组件。
@@ -65,11 +65,13 @@ mct-syslogger
         └── worker  任务处理
 ```
 
-树形目录以 `mct-syslogger` 为统一展示根节点，其下依次为项目、实例和组件，并按名称排序。`-p`、`-i`、`-c` 使用原文精确匹配，同类重复取 OR，不同条件取 AND；指定组件筛选后只显示匹配组件及其所属实例。`--json` 输出实例对象数组，其中包含 `project`、`instance_id`、`instance_description` 和 `components`；每个组件包含 `name` 和 `description`。
+树形目录以 `mct-syslogger` 为统一展示根节点，其下依次为项目、实例和组件，并按名称排序。`-p`、`-i`、`-c` 使用原文精确匹配，同类重复取 OR，不同条件取 AND；指定组件筛选后只显示匹配组件及其所属实例。`--json` 输出实例对象数组，包含 `project`、`instance_id`、`instance_description`、`created_at` 和 `components`；每个组件包含 `name`、`description`、`created_at`、`last_active_at` 和 `log_count`。时间为 UTC，计数以 JSON 整数输出，消费方应使用可保留 `uint64` 精度的类型。
 
 目录查询直接读取固定路径，与各进程的 `TMPDIR` 无关，也可在未安装 `journalctl` 时使用。目录尚未创建或筛选无结果时正常返回空列表；JSON 格式错误和实际文件读取失败明确报错。目录模式只接受身份筛选、`--json` 和 `--colour`，日志时间、等级、内容、条数和跟踪参数用于日志查询模式。
 
-清单在启动时重新生成、注册组件后更新，程序退出后保留，适合查找历史日志使用的名称。目录可由本机所有用户维护；项目和实例的磁盘文件名使用 SHA-256 摘要，JSON 保留身份原文。同一身份并行发布时最后完成的写入可见。临时目录被清理后，原有日志仍按 journal 留存范围查询，可以继续手动指定身份筛选。
+组件首次成功入队日志时由 SDK 后台建立记录，之后每 10 分钟批量合并活动和数量，正常关闭时最终同步。`log_count` 按组件独立累计成功入队的日志，后续发送结果不影响数量，`uint64` 溢出自然回零；异常退出可能丢失最近一次成功同步后的增量。项目锁保护同身份多进程的增量合并，项目和实例文件名使用 SHA-256 摘要，JSON 保留身份原文。
+
+组件按最后一次成功入队时间独立保留一年，后台轮询不续期。`--list` 只读过滤过期组件，过滤后没有组件的实例也不显示；SDK 每 10 分钟执行物理清理，并额外保留一个同步周期，让过期前已入队的活动继续合并历史计数，CLI 显示期限仍为一年。全部应用退出后暂停物理清理，后续运行再处理。名称目录可用于查询未过期的历史身份，实际日志仍按 journal 留存范围查询。根目录和项目目录为 `0777`，JSON 及项目锁文件为 `0666`，适用于受信本机环境；目录历史数据和旧目录由部署方自行处理。
 
 ## 查询示例
 
