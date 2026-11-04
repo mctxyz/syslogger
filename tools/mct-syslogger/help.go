@@ -87,7 +87,8 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   名称目录（--list）
 `)
 	fmt.Fprintf(output, "    读取 %s，按 项目 → 实例 → 组件 展示名称及描述。\n", catalog.Root)
-	fmt.Fprintln(output, "    组件名后依次显示累计数量、上次日志时间和描述；时间使用系统时区，格式为 YYYY-MM-DD HH:MM:SS。")
+	fmt.Fprintln(output, "    组件名后先显示本地时间，再显示“累计: 数量”；数量按千位分组，描述另起一行对齐时间列。")
+	fmt.Fprintln(output, "    时间格式为 YYYY-MM-DD HH:MM:SS，无表头；项目保持单行，实例描述继续跟在名称后。")
 	fmt.Fprintln(output, "    由启用 CatalogEnabled 的 SDK 按成功接收日志建立，包含异步入队及同步发送，逐组件过滤一年未活跃项。")
 	fmt.Fprintln(output, "    SDK 每 10 分钟同步并在关闭时最终保存；--json 包含创建时间、活跃时间和累计接收量。")
 
@@ -166,6 +167,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     --list --json：实例对象数组，字段为 project、instance_id、instance_description、components；
     components 中每项含 name、description。空目录输出 []，可读空目录无文本。
   • --colour 在可读输出中按等级和字段着色，重定向也保留 ANSI；JSON 始终无颜色。
+    目录中的组件时间、完整累计信息和组件描述统一弱化亮度。
     agent 和脚本建议使用 --json，或保持默认纯文本输出。
   • 查询结果写 stdout；帮助、参数错误和 journalctl 诊断写 stderr。
     退出码：0 成功 / 无匹配 / 帮助；1 查询失败；2 参数或正则错误；130 收到中断。

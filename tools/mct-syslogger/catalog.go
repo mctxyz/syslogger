@@ -4,10 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
+	"strings"
 	"time"
 
+	humanize "github.com/dustin/go-humanize"
 	"github.com/mctxyz/syslogger/internal/catalog"
+	"github.com/rivo/uniseg"
 )
+
+// 目录中的组件时间、累计信息和描述统一使用默认前景色的弱化亮度。
+const colourCatalogDetails = "\x1b[2m"
 
 // showCatalog 读取名称目录并过滤一年未活跃组件，身份筛选与展示独立于 journal。
 func showCatalog(store catalog.Store, opts options, output io.Writer) error {
@@ -47,6 +54,13 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 		encoder.SetEscapeHTML(false)
 		return encoder.Encode(selected)
 	}
+	// 同层组件在全部筛选结果中共享时间列；先转义再量宽，ANSI 样式在补齐之后单独附加。
+	nameWidth := 0
+	for _, instance := range selected {
+		for _, component := range instance.Components {
+			nameWidth = max(nameWidth, uniseg.StringWidth(escaped(component.Name)))
+		}
+	}
 	if len(selected) > 0 {
 		if _, err := fmt.Fprintln(output, "mct-syslogger"); err != nil {
 			return err
@@ -74,25 +88,40 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 			return err
 		}
 		for componentIndex, component := range instance.Components {
-			branch := "├── "
+			branch, descriptionPrefix := "├── ", "│   "
 			if componentIndex == len(instance.Components)-1 {
-				branch = "└── "
+				branch, descriptionPrefix = "└── ", "    "
 			}
-			// 数量直接使用 uint64 十进制，最近接收时间沿用日志可读输出的系统时区与秒级格式。
-			details := fmt.Sprintf("%d  %s", component.LogCount, component.LastActiveAt.Local().Format("2006-01-02 15:04:05"))
-			if component.Description != "" {
-				details += "  " + component.Description
+			name := escaped(component.Name)
+			padding := strings.Repeat(" ", nameWidth-uniseg.StringWidth(name)+2)
+			timestamp := component.LastActiveAt.Local().Format("2006-01-02 15:04:05")
+			// SetUint64 直接保留完整无符号整数，千位分组过程不经过有符号或浮点转换。
+			count := "累计: " + humanize.BigComma(new(big.Int).SetUint64(component.LogCount))
+			if opts.colour {
+				name = colourText(name, colourComponent)
+				timestamp = colourText(timestamp, colourCatalogDetails)
+				count = colourText(count, colourCatalogDetails)
 			}
-			label := catalogLabel(component.Name, details, colourComponent, opts.colour)
-			if _, err := fmt.Fprintln(output, projectPrefix+prefix+branch+label); err != nil {
+			line := projectPrefix + prefix + branch + name + padding + timestamp + "  " + count
+			if _, err := fmt.Fprintln(output, line); err != nil {
 				return err
+			}
+			if component.Description != "" {
+				description := escaped(component.Description)
+				if opts.colour {
+					description = colourText(description, colourCatalogDetails)
+				}
+				indent := projectPrefix + prefix + descriptionPrefix + strings.Repeat(" ", nameWidth+2)
+				if _, err := fmt.Fprintln(output, indent+description); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	return nil
 }
 
-// catalogLabel 复用日志输出的控制字符转义，身份与补充信息在树形目录中保持单行。
+// catalogLabel 复用日志输出的控制字符转义，为项目和实例保留单行名称及补充信息。
 func catalogLabel(name, details, style string, colour bool) string {
 	label := escaped(name)
 	if colour {

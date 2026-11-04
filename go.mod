@@ -3,10 +3,12 @@ module github.com/mctxyz/syslogger
 go 1.23.0
 
 require (
+	github.com/dustin/go-humanize v1.1.0
 	github.com/goccy/go-json v0.12.0
 	github.com/gofrs/flock v0.12.1
 	github.com/prometheus/client_golang v1.18.0
 	github.com/prometheus/common v0.45.0
+	github.com/rivo/uniseg v0.4.7
 	golang.org/x/sys v0.22.0
 )
 

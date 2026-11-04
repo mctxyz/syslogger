@@ -9,12 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
+	"github.com/rivo/uniseg"
 )
 
 func TestCatalogOptions(t *testing.T) {
@@ -72,13 +73,16 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	want := fmt.Sprintf(`mct-syslogger
 ├── a
 │   ├── local  主网实例
-│   │   ├── rpc  1  %[1]s  区块获取
-│   │   └── worker  1  %[1]s  后台任务
+│   │   ├── rpc     %[1]s  累计: 1
+│   │   │           区块获取
+│   │   └── worker  %[1]s  累计: 1
+│   │               后台任务
 │   └── other
-│       └── worker  1  %[1]s  后台任务
+│       └── worker  %[1]s  累计: 1
+│                   后台任务
 └── b
     └── local  B 实例
-        └── worker  1  %[1]s
+        └── worker  %[1]s  累计: 1
 `, timestamp)
 	if output.String() != want {
 		t.Fatalf("目录树不符:\n%s", output.String())
@@ -90,7 +94,8 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	want = fmt.Sprintf(`mct-syslogger
 └── a
     └── local  主网实例
-        └── rpc  1  %s  区块获取
+        └── rpc  %s  累计: 1
+                 区块获取
 `, timestamp)
 	if output.String() != want {
 		t.Fatalf("单项目筛选后的目录树不符:\n%s", output.String())
@@ -125,6 +130,14 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 	components := []catalog.Component{
 		{Name: "zero", CreatedAt: at, LastActiveAt: at, LogCount: 0},
 		{Name: "maximum", Description: "RPC\t获取", CreatedAt: at, LastActiveAt: at, LogCount: ^uint64(0)},
+		{Name: "thousand", CreatedAt: at, LastActiveAt: at, LogCount: 1000},
+		{Name: "normal", CreatedAt: at, LastActiveAt: at, LogCount: 11483},
+	}
+	counts := map[string]string{
+		"zero":     "0",
+		"maximum":  "18,446,744,073,709,551,615",
+		"thousand": "1,000",
+		"normal":   "11,483",
 	}
 	if err := store.Merge(catalog.Instance{Project: "p", InstanceID: "i", Components: components}, now); err != nil {
 		t.Fatal(err)
@@ -157,16 +170,24 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 				}
 				for _, component := range components {
 					name := component.Name
+					timeText, countText := timestamp, "累计: "+counts[component.Name]
 					if colour {
 						name = colourComponent + name + colourReset
+						timeText = colourCatalogDetails + timeText + colourReset
+						countText = colourCatalogDetails + countText + colourReset
 					}
-					want := name + "  " + strconv.FormatUint(component.LogCount, 10) + "  " + timestamp
-					if component.Description != "" {
-						want += `  RPC\t获取`
-					}
+					want := name + strings.Repeat(" ", 8-len(component.Name)+2) + timeText + "  " + countText
 					if !strings.Contains(output.String(), want+"\n") {
-						t.Fatalf("组件数量、时间格式、时区或描述不符: want=%q got=%q", want, output.String())
+						t.Fatalf("组件数量、时间格式、时区或亮度不符: want=%q got=%q", want, output.String())
 					}
+				}
+				description := `RPC\t获取`
+				if colour {
+					description = colourCatalogDetails + description + colourReset
+				}
+				wantDescription := "        │" + strings.Repeat(" ", 13) + description + "\n"
+				if !strings.Contains(output.String(), wantDescription) {
+					t.Fatalf("组件描述未另起一行对齐时间或样式不符: %q", output.String())
 				}
 			}
 			var output bytes.Buffer
@@ -178,6 +199,101 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 				t.Fatalf("可读显示格式影响了 JSON 目录数据: %s, %v", output.String(), err)
 			}
 		})
+	}
+}
+
+func TestCatalogVisibleColumnAlignment(t *testing.T) {
+	store := catalog.Store{Root: t.TempDir()}
+	at := time.Now().UTC()
+	instances := []catalog.Instance{
+		{Project: "p", InstanceID: "first", InstanceDescription: "实例说明", Components: []catalog.Component{
+			{Name: "a", Description: "description-a"},
+			{Name: "中文", Description: "description-chinese"},
+			{Name: "e\u0301", Description: "description-combining"},
+			{Name: "tab\tname", Description: "description-escaped"},
+		}},
+		{Project: "q", InstanceID: "second", Components: []catalog.Component{
+			{Name: "🌍", Description: "description-emoji"},
+		}},
+	}
+	for _, instance := range instances {
+		for index := range instance.Components {
+			instance.Components[index].CreatedAt = at
+			instance.Components[index].LastActiveAt = at
+			instance.Components[index].LogCount = 1
+		}
+		if err := store.Merge(instance, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
+	timestamp := at.Local().Format("2006-01-02 15:04:05")
+	for _, test := range []struct {
+		name   string
+		args   []string
+		column int
+	}{
+		{name: "all-projects", column: 23},
+		{name: "one-component", args: []string{"-c", "a"}, column: 15},
+		{name: "one-project", args: []string{"-p", "q"}, column: 16},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var plain string
+			for _, colour := range []bool{false, true} {
+				opts := testOptions(t, append([]string{"--list"}, test.args...)...)
+				opts.colour = colour
+				var output bytes.Buffer
+				if err := showCatalog(store, opts, &output); err != nil {
+					t.Fatal(err)
+				}
+				visible := ansi.ReplaceAllString(output.String(), "")
+				if colour && visible != plain {
+					t.Fatalf("ANSI 样式改变了对齐或文本:\n%s\n%s", plain, visible)
+				}
+				plain = visible
+				var components, descriptions int
+				for _, line := range strings.Split(visible, "\n") {
+					if position := strings.Index(line, timestamp); position >= 0 {
+						if width := uniseg.StringWidth(line[:position]); width != test.column {
+							t.Fatalf("组件时间列不符: width=%d want=%d line=%q", width, test.column, line)
+						}
+						components++
+					}
+					if position := strings.Index(line, "description-"); position >= 0 {
+						if width := uniseg.StringWidth(line[:position]); width != test.column {
+							t.Fatalf("描述与时间未按终端宽度对齐: width=%d want=%d line=%q", width, test.column, line)
+						}
+						descriptions++
+					}
+				}
+				if components == 0 || components != descriptions {
+					t.Fatalf("组件与描述不是逐条两行展示: %s", visible)
+				}
+			}
+		})
+	}
+}
+
+func TestCatalogDescriptionWriteError(t *testing.T) {
+	store := catalog.Store{Root: t.TempDir()}
+	at := time.Now().UTC()
+	instance := catalog.Instance{Project: "p", InstanceID: "i", Components: []catalog.Component{
+		{Name: "rpc", Description: "description", CreatedAt: at, LastActiveAt: at},
+	}}
+	if err := store.Merge(instance, at); err != nil {
+		t.Fatal(err)
+	}
+	writingErr := errors.New("描述输出失败")
+	writes := 0
+	writer := callbackWriter{write: func() error {
+		writes++
+		if writes == 5 {
+			return writingErr
+		}
+		return nil
+	}}
+	if err := showCatalog(store, testOptions(t, "--list"), writer); !errors.Is(err, writingErr) {
+		t.Fatalf("描述行的写入错误未返回: %v", err)
 	}
 }
 
