@@ -22,11 +22,11 @@ var optionGroups = []struct {
 	names []optionName
 }{
 	{
-		title: "模式选择",
+		title: "查看目录",
 		names: []optionName{{long: "list"}},
 	},
 	{
-		title: "身份筛选（日志 / 目录通用）",
+		title: "身份筛选（目录和日志通用）",
 		names: []optionName{
 			{long: "project", short: "p"},
 			{long: "instance-id", short: "i"},
@@ -34,7 +34,7 @@ var optionGroups = []struct {
 		},
 	},
 	{
-		title: "日志等级（仅日志查询）",
+		title: "日志等级（仅日志）",
 		names: []optionName{
 			{long: "level", short: "l"},
 			{long: "include-level"},
@@ -42,7 +42,7 @@ var optionGroups = []struct {
 		},
 	},
 	{
-		title: "时间与数量（仅日志查询）",
+		title: "时间与数量（仅日志）",
 		names: []optionName{
 			{long: "since", short: "s"},
 			{long: "until", short: "u"},
@@ -51,7 +51,7 @@ var optionGroups = []struct {
 		},
 	},
 	{
-		title: "内容搜索（仅日志查询）",
+		title: "内容搜索（仅日志）",
 		names: []optionName{
 			{long: "keyword", short: "k"},
 			{long: "regex", short: "e"},
@@ -59,11 +59,11 @@ var optionGroups = []struct {
 		},
 	},
 	{
-		title: "性能诊断（仅日志查询）",
+		title: "查询诊断（仅日志）",
 		names: []optionName{{long: "debug"}},
 	},
 	{
-		title: "输出与帮助（日志 / 目录通用）",
+		title: "输出与帮助（目录和日志通用）",
 		names: []optionName{
 			{long: "json"},
 			{long: "colour"},
@@ -71,28 +71,43 @@ var optionGroups = []struct {
 	},
 }
 
-// writeHelp 将参数参考和排障规则集中展示，查询结果的输出格式保持独立。
+// writeHelp 先展示身份发现和常用查询，再提供完整参数与自动化契约。
 func writeHelp(output io.Writer, flags *flag.FlagSet) {
-	fmt.Fprint(output, `mct-syslogger — 本模块的本机日志目录与 journal 检索
+	fmt.Fprint(output, `mct-syslogger — 查看本机 syslogger 日志及项目 / 实例 / 组件目录
 
 用法：
-  mct-syslogger [筛选参数] [时间参数] [输出参数]
-  mct-syslogger --list [身份筛选] [输出参数]
-  mct-syslogger --help
+  mct-syslogger --list [身份筛选] [--json] [--colour]
+  mct-syslogger [身份筛选] [日志过滤参数] [输出参数]
+  身份筛选：-p PROJECT、-i INSTANCE、-c COMPONENT，均可省略或重复。
 
-查询方式：
-  普通查询（默认）
-    最近 1 小时内最新 100 条匹配日志，按 journal 从旧到新显示。
-  实时跟踪（-f）
-    先输出起始时间以来的匹配历史，再等待新日志，默认不限条数。
-  名称目录（--list）
+1. 先找有哪些 project / instance / component
+  三层目录依次是：project（项目）→ instance（运行实例）→ component（实例内组件）。
+  树根 mct-syslogger 只是标题，下面三层才是可筛选的名称。
+  example-project / example-instance / example-component 是示例，请替换为实际列出的名称。
+
+  查看所有项目及其下的实例、组件：
+    mct-syslogger --list
+  查看某项目下的实例、组件：
+    mct-syslogger --list -p example-project
+  查看某项目某实例下的组件：
+    mct-syslogger --list -p example-project -i example-instance
+  组件行的时间和累计数表示 SDK 接收活动，不是 journal 当前留存条数。
+
+2. 用找到的名称查日志
+  查看该组件近 1 小时内最新 100 条匹配日志：
+    mct-syslogger -p example-project -i example-instance -c example-component
+  查某项目近 2 小时、warning 及更严重、内容包含 timeout 的日志，最多 200 条：
+    mct-syslogger -p example-project -s=-2h -l warning -k timeout -n 200
+  只看 error 这一个等级（-l error 则还包含 critical / alert / emergency）：
+    mct-syslogger -p example-project --include-level error
+  从现在起持续跟踪该实例的新日志，Ctrl+C 退出：
+    mct-syslogger -p example-project -i example-instance -s now -f
+
+默认行为：省略身份表示不限该项；日志默认近 1 小时、全部等级、最多 100 条。
+普通查询先选最新 N 条匹配记录，再从旧到新显示；-n 0 取消条数限制，仍受时间范围限制。
+
+参数速查：
 `)
-	fmt.Fprintf(output, "    读取 %s，按 项目 → 实例 → 组件 展示名称及描述。\n", catalog.Root)
-	fmt.Fprintln(output, "    组件名后先显示本地时间，再显示“累计: 数量”；数量按千位分组，描述另起一行对齐时间列。")
-	fmt.Fprintln(output, "    时间格式为 YYYY-MM-DD HH:MM:SS，无表头；项目保持单行，实例描述继续跟在名称后。")
-	fmt.Fprintln(output, "    由启用 CatalogEnabled 的 SDK 按成功接收日志建立，包含异步入队及同步发送，逐组件过滤一年未活跃项。")
-	fmt.Fprintln(output, "    SDK 每 10 分钟同步并在关闭时最终保存；--json 包含创建时间、活跃时间和累计接收量。")
-	fmt.Fprintf(output, "\n日志查询固定读取 %s journal 命名空间，专用实例由管理员预先启用。\n", journalwire.Namespace)
 
 	writer := tabwriter.NewWriter(output, 30, 4, 2, ' ', 0)
 	for _, group := range optionGroups {
@@ -120,106 +135,48 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 	// Go flag 在未注册同名参数时自动处理 -h 和 --help。
 	fmt.Fprintln(writer, "  -h, --help\t显示完整帮助并退出")
 	writer.Flush()
-	fmt.Fprintln(output, "主机初始化使用独立子命令，说明见 mct-syslogger init --help。")
 
-	fmt.Fprintln(output, "\n可用等级（严重程度从高到低，使用小写名称）：")
+	fmt.Fprintln(output, "\n3. 过滤怎么组合")
+	fmt.Fprintln(output, "  等级从严重到轻微（使用小写）：")
 	fmt.Fprintln(output, "  "+strings.Join(levels, ", "))
 	fmt.Fprint(output, `
-参数与组合规则：
-  • 带大写占位符的参数需要一个值，如 -i local-a、--since=-2h。
-    含空格、正则或特殊字符的值请加引号；布尔参数支持 =true / =false，如 --colour=false。
-    查询条件通过参数传入，查询模式的位置参数会报错；init 使用独立参数和帮助。
-  • project / instance_id / component 精确匹配、区分大小写，使用目录中的名称原文。
-    同类身份重复取 OR，不同筛选条件取 AND；未指定某项身份时，该项不限。
-  • 日志来源为本模块的原生 journal 输出，severity 对应 PRIORITY。
-    SDK 写入 SYSLOGGER_PROJECT、SYSLOGGER_INSTANCE_ID、SYSLOGGER_COMPONENT，
-    journalctl 使用这些原文身份字段和最终等级集合预筛。
-    应用需升级 SDK 并重新部署；身份筛选依赖对应原生字段，采集转发也须保留这些字段。
-    Go 再按正文原文复核项目、实例、组件、等级及内容，数量限制在全部筛选之后执行。
-  • -l / --level 指定单一严重程度阈值，显示该等级及更严重等级；等级名使用小写。
-    -l info 显示 info、notice、warning、error、critical、alert、emergency；-l debug 显示全部。
-    默认 debug；重复指定 --level 或 -l 时，以最后一个值为准。
-  • --include-level 按等级名称精确包含，可重复（OR）；未指定时，包含范围不限。
-    例如 -c rpc -c worker --include-level error 表示 (rpc 或 worker) 且等级为 error。
-  • 最终等级集合 = 阈值范围 ∩ 包含集合，再移除任一 --exclude-level 指定的等级。
-    例如 -l warning --include-level info --include-level error 仅显示 error。
-    --include-level error --exclude-level error 得到空结果；所有筛选均先于条数计数。
-  • 每个 -k 和每个 -e 都必须匹配；单项可在 message 或 fields JSON 任一处命中。
-    fields 搜索包含字段名及嵌套内容；身份、时间、目录描述不参与内容搜索。
-    --ignore-case 只影响 -k；正则用 (?i) 忽略大小写、用 | 表达 OR。
-    正则使用 Go regexp 语法（RE2），不支持前后向断言和反向引用。
-  • --list 只接受 -p / -i / -c、--json、--colour（及其长参数形式）。
-    组件筛选后显示匹配组件及所属实例；目录缺省或无匹配时为空结果。
-    目录记录是历史身份线索，进程是否仍在运行应结合实际日志判断。
+  身份：精确匹配、区分大小写；同类任选其一（OR），不同类同时满足（AND）。
+    -c example-component -c example-component-2 表示这两个组件任选其一。
+    实例名、组件名可能在不同项目下重复，建议同时指定 -p。
+  等级：-l 是严重程度阈值；--include-level 可重复选择多个等级；--exclude-level 优先排除。
+    同时设置阈值和精确选择时，只保留两者都允许的等级；重复 -l 取最后一个。
+  内容：-k / -e 搜索 message 或 fields（含字段名）；每个关键词、每个正则都要匹配。
+    -k timeout -k retry 表示两个词都要出现；-e '(?i)(timeout|refused)' 表示任一词，忽略大小写。
+    默认区分大小写；--ignore-case 只作用于 -k，正则忽略大小写使用 (?i)。
+  时间：筛选 journal 收录时间；绝对时间未写时区时按本机时区解释。
+    如 -s=-2h，或 -s '2026-11-05 09:00:00 UTC' -u '2026-11-05 10:00:00 UTC'。
+  跟踪：-f 按 -s 读取历史后等待新日志；默认近 1 小时，-s now -f 只看新日志。
+    跟踪默认不限条数；-n N 同时计入历史和新日志，达到后退出；-f 与 -u 不能同用。
+  目录：--list 只接受身份筛选、--json、--colour，不接受时间、等级和内容过滤。
+  写法：大写名称是待替换的参数值；含空格或正则的值加引号；查询条件都通过参数传入。
 
-时间与条数：
-  • -s / -u 交给本机 journalctl 解释，筛选的是 journal 收录时间。
-    例如 -s=-2h、-s today、-s now，或 -s '2026-10-23 09:00:00 UTC'。
-    无时区的绝对时间按设备本地时区解释；指定 UTC 可避免跨设备时区歧义。
-  • 普通查询 -n N 选取范围内最新 N 条匹配记录，再按 journal 从旧到新输出。
-    -n 0 输出范围内全部匹配记录；扩大历史范围须同时调整 -s。
-  • -f 未指定 -n 时不限条数；显式 -n N 同时累计历史和新日志，达到上限退出。
-    只看新日志用 -s now -f；固定时间段用 -s 和 -u，--until 与 --follow 互斥。
-    自动化跟踪宜指定正数 -n；匹配不足时仍会等待，可由调用方设置执行时限。
-
-输出与退出码：
-  • 默认可读日志：本地时间 等级 project/instance_id/component 消息 fields。
-    时间来自正文 timestamp，按运行设备的系统时区显示到秒；换行和控制字符转义为单行。
-    正文时间和 journal 收录时间可能因交付延迟而不同；JSON 保留原始时间及精度。
-  • --json：日志每行一条原始 JSON 正文（NDJSON），保留业务字段，不含 journal 元数据。
-    --list --json：实例对象数组，字段为 project、instance_id、instance_description、components；
-    components 中每项含 name、description。空目录输出 []，可读空目录无文本。
-  • --colour 在可读输出中按等级和字段着色，重定向也保留 ANSI；JSON 始终无颜色。
-    目录中的组件时间、完整累计信息和组件描述统一弱化亮度。
-    agent 和脚本建议使用 --json，或保持默认纯文本输出。
-  • 查询结果写 stdout；帮助、参数错误和 journalctl 诊断写 stderr。
-    退出码：0 成功 / 无匹配 / 帮助；1 查询失败；2 参数或正则错误；130 收到中断。
-    journalctl 的权限或时间格式错误属于查询失败，返回 1，详细原因见 stderr。
-  • --debug 在查询结束或中断后向 stderr 汇总扫描量、匹配量、首行/首匹配/首输出延迟，
-    以及启动、读取、解析、筛选、格式化、写入和进程收尾耗时；不改变 stdout 格式。
-    journalctl.args 展示原生预筛条件，scanned_lines 是预筛后读入 Go 的行数。
-    fields 解码/编码耗时已包含在筛选或格式化中；read 含等待 journalctl，跟踪空闲也计入其中。
-    该开关用于性能诊断，与 -l debug（等级阈值）独立；计时本身会增加开销。
-
-排障示例（将 contract-listener / local-a / rpc 替换为实际身份）：
-  查看本机身份目录，选择项目、实例和组件：
-    mct-syslogger --list
-    mct-syslogger --list -p contract-listener --json
-
-  查询一个实例的 RPC 组件，最近两小时最新 200 条：
-    mct-syslogger -p contract-listener -i local-a -c rpc -s=-2h -n 200
-
-  查看 info 及更严重等级；或精确选择 error、critical；或排除 debug：
-    mct-syslogger -i local-a -l info
-    mct-syslogger -i local-a --include-level error --include-level critical
-    mct-syslogger -i local-a --exclude-level debug
-
-  分析项目和实例查询的耗时，性能汇总写入 stderr：
-    mct-syslogger -p contract-listener -i listener-v2 -l notice --debug
-
-  消息或业务字段必须同时包含 timeout 和 retry，关键词忽略大小写：
-    mct-syslogger -i local-a -k timeout -k retry --ignore-case
-
-  匹配 timeout 或 connection refused，正则忽略大小写：
-    mct-syslogger -i local-a -e '(?i)(timeout|connection refused)'
-
-  固定 UTC 时间段的全部匹配日志，输出 NDJSON：
-    mct-syslogger -i local-a -s '2026-10-23 09:00:00 UTC' -u '2026-10-23 10:00:00 UTC' -n 0 --json
-
-  从现在起跟踪并排除 debug；或从最近 10 分钟跟踪，累计匹配 20 条后退出：
-    mct-syslogger -i local-a -s now -f --exclude-level debug
-    mct-syslogger -i local-a -s=-10m -f -n 20 --json
-
-无结果与权限排查：
-  1. 默认只查最近 1 小时；查启动记录或较早事件时，先扩大 -s，如 -s=-24h -n 0。
-  2. 用 --list 核对身份原文，逐步减少身份、等级和内容条件；目录退出后仍保留。
-  3. 日志查询需要 Linux、systemd 245+、journalctl 和 journal 读取权限；可见范围受权限及留存策略影响。
-     可使用 journalctl --namespace=mct-syslogger 核对专用日志；旧默认 journal 历史用普通 journalctl 查看。
-     工具只展示符合 syslogger 结构的 JSON 正文，目录缺省时仍可手动指定身份查询。
-  4. 需要提升读取权限时，可使用 sudo mct-syslogger ...。
-     管理员也可将普通用户加入 systemd-journal 组：
-       sudo usermod -aG systemd-journal username
-     将 username 替换为实际用户名，退出并重新登录后生效。
-     查询模式只读取日志与目录，主机初始化使用独立的 init 子命令。
+4. Agent / 脚本怎么用
+  先读取机器可读目录，取得准确的名称：
+    mct-syslogger --list --json
+  目录是 JSON 数组：每项的 project、instance_id 对应 -p、-i，components[].name 对应 -c。
+  再指定身份、时间和数量查询；输出为 NDJSON，每行一个 JSON 对象：
+    mct-syslogger -p example-project -i example-instance -c example-component -s=-2h -n 200 --json
+  日志字段：timestamp、level、project、instance_id、component、message，以及可选 fields。
+  结果写 stdout；帮助、错误和 --debug 查询统计写 stderr；默认无 ANSI 颜色。
+  JSON 查询无匹配时：目录输出 []，日志无记录输出，均返回 0。
+  退出码：0=成功/无匹配/帮助；1=查询失败；2=参数/正则错误；130=收到中断。
+  批处理优先使用不带 -f 的查询；跟踪即使指定 -n，匹配不足也会等待，需另设执行时限。
 `)
+	fmt.Fprintf(output, `
+5. 目录为空或查不到日志？
+  目录读取 %s；业务需开启 CatalogEnabled，并实际产生日志。
+  正常更新可能滞后约 10 分钟，只列出一年内有日志接收活动的组件。
+  目录不代表进程存活或 journal 仍有日志；已知名称可直接查询。
+  日志默认只查近 1 小时；先扩大范围（-s=-24h -n 0），再减少过滤条件。
+  日志固定读取 %s 命名空间；需要 Linux、systemd 245+、journalctl 和读取权限。
+  权限不足可用 sudo mct-syslogger ...；旧默认日志用普通 journalctl 查。
+  查询模式只读；主机初始化由管理员操作，参数与影响先查看：
+    mct-syslogger init --help
+  安装配置与完整规则见项目 tools/README.md、docs/journal.md。
+`, catalog.Root, journalwire.Namespace)
 }

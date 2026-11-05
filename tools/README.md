@@ -2,6 +2,36 @@
 
 `mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询固定读取 `mct-syslogger` journal 命名空间，以模块的原生 journal JSON 正文为输入契约，通过 `journalctl` 的项目、实例、组件和等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要 Linux、systemd 245+、journalctl 及相应读取权限，专用命名空间的准备见[部署说明](../docs/journal.md)。
 
+## 快速上手：先找名称，再查日志
+
+目录的三层依次是 `project`（项目）、`instance`（运行实例）、`component`（实例内组件），树根 `mct-syslogger` 只是标题。下方 `example-project`、`example-instance`、`example-component` 都是示例，请替换成实际列出的名称：
+
+```sh
+# 看有哪些项目，以及各项目下的实例和组件。
+mct-syslogger --list
+
+# 逐层缩小目录范围，找到需要查询的组件。
+mct-syslogger --list -p example-project
+mct-syslogger --list -p example-project -i example-instance
+
+# 使用找到的身份查询：默认近 1 小时、全部等级、最新 100 条匹配日志。
+mct-syslogger -p example-project -i example-instance -c example-component
+
+# 加时间、等级和内容过滤：最近 2 小时，warning 及更严重，包含 timeout。
+mct-syslogger -p example-project -s=-2h -l warning -k timeout -n 200
+
+# 只跟踪新日志；Ctrl+C 退出。
+mct-syslogger -p example-project -i example-instance -s now -f
+
+# Agent / 脚本先读 JSON 目录，再输出日志 NDJSON。
+mct-syslogger --list --json
+mct-syslogger -p example-project -i example-instance -c example-component -s=-2h -n 200 --json
+```
+
+目录 JSON 是实例对象数组：`project` 对应 `-p`，`instance_id` 对应 `-i`，`components[].name` 对应 `-c`。日志 JSON 为 NDJSON，每行一个日志对象。结果写 stdout，帮助、错误及 `--debug` 查询统计写 stderr。批处理优先不带 `-f`；跟踪即使指定 `-n`，匹配不足仍会等待，需要调用方设置执行时限。
+
+同类身份重复时任选其一（OR），不同类身份同时满足（AND）；关键词和正则条件则全部要满足。`-l error` 表示 error 及更严重，`--include-level error` 表示只看 error。`-n 0` 只取消条数限制，查更早的日志仍要扩大 `-s`。目录是 SDK 发布的历史名称，不代表进程存活或 journal 留存；目录为空时，已知身份仍可直接查询。完整速查使用 `mct-syslogger --help`，管理员初始化的参数与影响使用 `mct-syslogger init --help`。
+
 ## Release 下载与安装
 
 从 [GitHub Releases](https://github.com/mctxyz/syslogger/releases) 下载同一版本的 `SHA256SUMS` 及对应架构压缩包：
@@ -42,7 +72,7 @@ tag 的检查通过后，工作流使用 `CGO_ENABLED=0` 编译 Linux amd64、ar
 ```sh
 go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
 ./tools/bin/mct-syslogger --help
-./tools/bin/mct-syslogger --project syslogger-test --instance-id syslogger-test --component rpc
+./tools/bin/mct-syslogger --project example-project --instance-id example-instance --component example-component
 ```
 
 可以在 shell 配置中添加别名（替换为实际仓库绝对路径）：
@@ -58,7 +88,7 @@ mkdir -p "$HOME/.local/bin"
 install -m 755 /path/to/syslogger/tools/bin/mct-syslogger "$HOME/.local/bin/mct-syslogger"
 ```
 
-需要提升 journal 读取权限时，在命令前使用 `sudo`，例如 `sudo /path/to/syslogger/tools/bin/mct-syslogger -i local-a`。查询模式只读取日志和目录；主机配置通过独立的 `init` 子命令完成。`tools/bin/` 是已忽略的本地构建目录。
+需要提升 journal 读取权限时，在命令前使用 `sudo`，例如 `sudo /path/to/syslogger/tools/bin/mct-syslogger -p example-project -i example-instance`。查询模式只读取日志和目录；主机配置通过独立的 `init` 子命令完成。`tools/bin/` 是已忽略的本地构建目录。
 
 要让普通用户直接读取系统 journal，管理员可将其加入 `systemd-journal` 组（将 `username` 替换为实际用户名）：
 
@@ -66,7 +96,7 @@ install -m 755 /path/to/syslogger/tools/bin/mct-syslogger "$HOME/.local/bin/mct-
 sudo usermod -aG systemd-journal username
 ```
 
-退出并重新登录后组权限生效。命令的 `--help` 同时提供这一配置示例。
+退出并重新登录后组权限生效。命令的 `--help` 提供查询流程和排障提示，账户权限由管理员按本节配置。
 
 日志查询统一向 `journalctl` 传入 `--namespace=mct-syslogger`，身份、等级、时间及跟踪参数继续按下文组合。专用存储、容量和轮转独立于默认 journal；原生 `log` 兜底继续由宿主程序的 stderr／标准日志配置接管。SDK 与 CLI 需配套升级，旧默认 journal 历史仍可使用普通 `journalctl` 查看。
 
@@ -93,11 +123,11 @@ mct-syslogger init --help
 slog --list
 
 # 查看一个项目或一个实例。
-slog --list -p contract-listener
-slog --list -p contract-listener -i mainnet-a
+slog --list -p example-project
+slog --list -p example-project -i example-instance
 
 # 按组件筛选，或输出机器可读的 JSON 数组。
-slog --list -c rpc --colour
+slog --list -c example-component --colour
 slog --list --json
 ```
 
@@ -105,16 +135,16 @@ slog --list --json
 
 ```text
 mct-syslogger
-├── contract-listener
-│   └── mainnet-a  主网事件监听
-│       ├── rpc     2026-11-03 14:38:15  累计: 123
-│       │           区块与日志获取
-│       └── worker  2026-11-03 14:38:16  累计: 42
-│                   事件处理
-└── other-project
-    └── main  后台任务服务
-        └── worker  2026-11-03 14:37:00  累计: 8
-                    任务处理
+├── example-project
+│   └── example-instance  示例运行实例
+│       ├── example-component    2026-11-03 14:38:15  累计: 123
+│       │                        示例组件描述
+│       └── example-component-2  2026-11-03 14:38:16  累计: 42
+│                                另一个示例组件
+└── example-project-2
+    └── example-instance-2  另一个示例实例
+        └── example-component    2026-11-03 14:37:00  累计: 8
+                                 示例组件描述
 ```
 
 树形目录以 `mct-syslogger` 为统一展示根节点，其下依次为项目、实例和组件，并按名称排序，不增加表头。项目和实例保持单行展示，实例描述继续跟在名称后。组件首行依次显示名称、上次接收时间和 `累计: 数量`；所有选中组件按名称的终端显示宽度对齐时间列，只有组件描述另起一行并与时间列对齐，空描述不占行。数量左对齐，使用逗号千位分隔保留完整十进制，例如 `11,483`；时间按设备系统时区显示为 `YYYY-MM-DD HH:MM:SS`。数值来自最近一次成功同步的目录记录，常规周期同步期间可能滞后于内存活动。
@@ -131,50 +161,50 @@ mct-syslogger
 
 ## 查询示例
 
-`mct-syslogger --help` 按模式、身份、等级、时间、内容和输出分组展示全部参数，同时说明组合规则、退出码、权限及排障流程。推荐先用 `--list` 核对身份，再查询日志；agent 可用 `--list --json` 获取实例对象数组，用日志查询的 `--json` 获取 NDJSON。
+`mct-syslogger --help` 先展示逐层发现身份和常用查询，再给出参数速查、过滤组合、agent／脚本用法及排障提示。推荐先用 `--list` 核对身份，再查询日志；agent 可用 `--list --json` 获取实例对象数组，用日志查询的 `--json` 获取 NDJSON。
 
 以下示例使用上方的 `slog` 别名：
 
 ```sh
-# 某实例的 RPC 模块，最近一小时内最新 100 条匹配日志。
-slog -p syslogger-test -i syslogger-test -c rpc
+# 某实例的某个组件，最近一小时内最新 100 条匹配日志。
+slog -p example-project -i example-instance -c example-component
 
 # 固定 UTC 时间范围内的全部匹配日志。
-slog -i local-a -s '2026-10-23 09:00:00 UTC' -u '2026-10-23 10:00:00 UTC' -n 0
+slog -p example-project -i example-instance -s '2026-10-23 09:00:00 UTC' -u '2026-10-23 10:00:00 UTC' -n 0
 
 # 最近两小时，消息或业务字段同时包含两个关键词。
-slog -i local-a -s=-2h -k '请求' -k '超时'
+slog -p example-project -i example-instance -s=-2h -k '请求' -k '超时'
 
 # 字面关键词忽略大小写；每个关键词都须在消息或业务字段中匹配。
-slog -i local-a -k timeout -k retry --ignore-case
+slog -p example-project -i example-instance -k timeout -k retry --ignore-case
 
 # Go 正则：匹配任一错误描述，忽略大小写。
-slog -c rpc -e '(?i)(timeout|connection refused)'
+slog -p example-project -c example-component -e '(?i)(timeout|connection refused)'
 
 # 查看 info 及更严重的日志；debug 阈值表示全部等级。
-slog -i local-a -l info
+slog -p example-project -i example-instance -l info
 
 # 同时查看多个模块，精确选择 error 和 critical 两个等级。
-slog -i local-a -c rpc -c worker --include-level error --include-level critical
+slog -p example-project -c example-component -c example-component-2 --include-level error --include-level critical
 
 # 排除 debug，或同时排除多个等级。
-slog -i local-a --exclude-level debug
-slog -i local-a --exclude-level debug --exclude-level info
+slog -p example-project -i example-instance --exclude-level debug
+slog -p example-project -i example-instance --exclude-level debug --exclude-level info
 
 # 组合阈值、精确包含和排除，最终仅显示 error。
-slog -i local-a -l warning --include-level error --include-level critical --exclude-level critical
+slog -p example-project -l warning --include-level error --include-level critical --exclude-level critical
 
 # 按日志等级及项目、实例、模块、消息、业务字段分色显示。
-slog -i local-a --colour
+slog -p example-project -i example-instance --colour
 
 # 从现在起实时跟踪；Ctrl+C 退出。
-slog -i local-a -s now -f
+slog -p example-project -i example-instance -s now -f
 
 # 从最近 10 分钟开始跟踪，匹配 20 条后退出。
-slog -i local-a -s=-10m -f -n 20
+slog -p example-project -i example-instance -s=-10m -f -n 20
 
 # 每行输出完整 JSON，可继续用其他工具分析。
-slog -i local-a -n 500 --json
+slog -p example-project -i example-instance -n 500 --json
 ```
 
 ## 过滤和输出规则
@@ -226,10 +256,10 @@ slog -i local-a -n 500 --json
 在原有查询命令后添加 `--debug`，日志仍写入 stdout，性能汇总写入 stderr：
 
 ```sh
-mct-syslogger -p contract-listener -i listener-v2 -l notice --debug
+mct-syslogger -p example-project -i example-instance -l notice --debug
 
 # 单独保存性能汇总和 journalctl 诊断。
-mct-syslogger -p contract-listener -i listener-v2 -l notice --debug 2>query-debug.txt
+mct-syslogger -p example-project -i example-instance -l notice --debug 2>query-debug.txt
 ```
 
 该开关与 `-l debug`（显示全部等级的阈值）独立，可用 `--debug=false` 关闭。仅统计当前日志查询，查询完成、失败或 Ctrl+C 收尾后汇总一次；`--list` 使用目录查询流程，参数范围保持为身份筛选与目录输出选项。
