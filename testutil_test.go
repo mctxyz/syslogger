@@ -93,7 +93,8 @@ func testManager(t *testing.T, cfg Config) *Manager {
 
 func testComponent(t *testing.T, m *Manager, name string) *Component {
 	t.Helper()
-	c, err := m.Register(ComponentConfig{Name: name})
+	// 既有健康链路用例显式启用导出，零值关闭由直接注册组件的用例验证。
+	c, err := m.Register(ComponentConfig{Name: name, EnableHealthMetrics: true})
 	if err != nil {
 		t.Fatal(err)
 	}

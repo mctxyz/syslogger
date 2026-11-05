@@ -13,12 +13,13 @@ import (
 
 // Component 绑定固定模块身份、独立日志队列和同步健康记录，可并发使用。
 type Component struct {
-	manager     *Manager
-	name        string
-	description string
-	logs        *logging.Queue
-	logReporter diagnostic.Reporter
-	mu          sync.RWMutex
+	manager             *Manager
+	name                string
+	description         string
+	enableHealthMetrics bool
+	logs                *logging.Queue
+	logReporter         diagnostic.Reporter
+	mu                  sync.RWMutex
 	// current 保存业务主动记录，关闭后保存截止时冻结的有效健康记录。
 	current record.Record
 	// lastQueueFull 由真实的队满拒收更新，以组件锁保护恢复窗口的唯一时间依据。

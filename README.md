@@ -30,6 +30,7 @@ if err != nil {
 rpc, err := manager.Register(syslogger.ComponentConfig{
     Name: "rpc",
     Description: "区块与日志获取",
+    EnableHealthMetrics: true,
     QueueCapacity: 512,
 })
 if err != nil {
@@ -205,6 +206,30 @@ SDK 每 10 分钟清理过期记录，物理清理额外保留一个同步周期
 
 `Healthy()`、`Degraded()`、`Unhealthy()` 无参数、无返回值，同步提交业务状态及库采集的时间。状态维护默认关闭，关闭时这些方法直接返回；日志与业务状态分别调用。四态为 0=Unknown、1=Healthy、2=Degraded、3=Unhealthy，Unknown 表示组件尚未形成业务或自动健康报告。较新业务入口时间整体替换业务记录，相同时间由后提交者覆盖，同状态也更新时间。
 
+### 逐组件健康指标
+
+`ComponentConfig.EnableHealthMetrics` 控制该组件是否导出 `syslogger_component_state` 和 `syslogger_component_timestamp_seconds`，默认 `false` 不输出这两项样本，需要时在注册阶段显式开启：
+
+```go
+rpc, err := manager.Register(syslogger.ComponentConfig{
+    Name: "rpc",
+    EnableHealthMetrics: true,
+})
+if err != nil {
+    return err
+}
+runtime, err := manager.Register(syslogger.ComponentConfig{Name: "runtime"})
+if err != nil {
+    return err
+}
+rpc.Healthy()
+runtime.Info("进程已启动", nil)
+```
+
+该选项只控制导出，注册后固定：全局 `Config.StateEnabled` 仍控制健康记录维护，`DegradeOnQueueFull` 仍按原规则更新有效状态；显式开启导出但状态维护关闭时，健康样本保持初始 Unknown/0。两个日志 Counter 始终按原日志路径维护并参与采集，日志发送、同步日志及名称目录累计量不受此选项影响。管理器内置 `syslogger_manager` 的健康指标继续遵守原有全局状态配置。
+
+HTTP、文件和外部共享 Registry 使用同一个 Collector，按组件采用相同的导出选择。升级前已依赖组件健康指标的调用方，需要为对应注册补充 `EnableHealthMetrics: true`；未启用的组件没有这两项样本，而不是输出零值。
+
 ### 队满自动降级
 
 ```go
@@ -235,7 +260,14 @@ manager := syslogger.SafeNew(syslogger.Config{
 | `syslogger_component_log_rejected_total` | Counter | 模块接收前拒收的调用累计次数 |
 | `syslogger_component_log_send_failures_total` | Counter | 模块异步及同步发送失败的条目累计数 |
 
-内置样本带上述三个身份标签。业务组件输出四条样本，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
+内置样本带上述三个身份标签。业务组件始终输出两个日志 Counter，显式开启 `EnableHealthMetrics` 后再输出状态和状态时间，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
+
+官方文本编码为状态指标族输出一条共享的 HELP 注释，所有组件的状态样本共用数值说明；HTTP 与 `.prom` 文件均包含该注释：
+
+```text
+# HELP syslogger_component_state 组件健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。
+# TYPE syslogger_component_state gauge
+```
 
 ### 共享业务指标
 
@@ -255,7 +287,7 @@ if err != nil {
     return err
 }
 defer manager.Close(context.Background())
-rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacity: 512})
+rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacity: 512, EnableHealthMetrics: true})
 if err != nil {
     return err
 }

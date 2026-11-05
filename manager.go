@@ -107,10 +107,13 @@ func newManager(cfg Config) *Manager {
 	return m
 }
 
-// ComponentConfig 定义模块的日志身份、展示描述和独立队列容量。
+// ComponentConfig 定义模块的日志身份、展示描述、健康指标导出和独立队列容量。
 type ComponentConfig struct {
 	Name        string
 	Description string
+	// EnableHealthMetrics 显式导出该组件的状态和状态时间，零值不输出这两项样本。
+	// 只控制指标导出；日志 Counter、状态维护及队满降级继续遵守各自配置。
+	EnableHealthMetrics bool
 	// QueueCapacity 为 1～4096 时使用原值，其余值采用 Config.DefaultQueueCapacity。
 	QueueCapacity int
 }
@@ -157,7 +160,12 @@ func (m *Manager) Register(cfg ComponentConfig) (component *Component, err error
 	if queueCapacity < 1 || queueCapacity > maximumQueueCapacity {
 		queueCapacity = m.cfg.DefaultQueueCapacity
 	}
-	component = &Component{manager: m, name: name, description: cfg.Description}
+	component = &Component{
+		manager:             m,
+		name:                name,
+		description:         cfg.Description,
+		enableHealthMetrics: cfg.EnableHealthMetrics,
+	}
 	m.components[name] = component
 	added = true
 	if m.cfg.StateEnabled {

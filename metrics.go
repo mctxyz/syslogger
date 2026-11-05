@@ -17,7 +17,7 @@ var metricDefinitions = [...]struct {
 	help      string
 	valueType prometheus.ValueType
 }{
-	{"syslogger_component_state", "组件健康状态：0=未知，1=健康，2=降级，3=不健康。", prometheus.GaugeValue},
+	{"syslogger_component_state", "组件健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。", prometheus.GaugeValue},
 	{"syslogger_component_timestamp_seconds", "当前健康记录的汇报时间，单位为 Unix 秒，尚无汇报时为 0。", prometheus.GaugeValue},
 	{"syslogger_component_log_rejected_total", "接收前拒收的日志调用累计次数。", prometheus.CounterValue},
 	{"syslogger_component_log_send_failures_total", "异步及同步发送失败的日志条目累计数。", prometheus.CounterValue},
@@ -25,11 +25,13 @@ var metricDefinitions = [...]struct {
 
 // componentSnapshot 是一次采集读取的组件健康事实及日志计数。
 type componentSnapshot struct {
-	Name         string
-	Record       record.Record
-	HasLogs      bool
-	Rejected     uint64
-	SendFailures uint64
+	Name   string
+	Record record.Record
+	// HealthMetrics 选择导出健康样本，内部 Record 仍供状态与关闭流程使用。
+	HealthMetrics bool
+	HasLogs       bool
+	Rejected      uint64
+	SendFailures  uint64
 }
 
 // Registry 返回实际使用的注册表，业务可向其中注册官方 Collector 或交给 promhttp 使用。
@@ -62,6 +64,9 @@ func (m *Manager) Collect(ch chan<- prometheus.Metric) {
 			float64(component.SendFailures),
 		}
 		for index, definition := range metricDefinitions {
+			if index < 2 && !component.HealthMetrics {
+				continue
+			}
 			if index >= 2 && !component.HasLogs {
 				continue
 			}
@@ -85,17 +90,19 @@ func (m *Manager) snapshot() []componentSnapshot {
 	var result []componentSnapshot
 	if m.diagnostic != nil {
 		result = append(result, componentSnapshot{
-			Name:   diagnostic.ComponentName,
-			Record: m.diagnostic.Current,
+			Name:          diagnostic.ComponentName,
+			Record:        m.diagnostic.Current,
+			HealthMetrics: true,
 		})
 	}
 	m.mu.RUnlock()
 	for _, component := range components {
 		component.mu.RLock()
 		item := componentSnapshot{
-			Name:    component.name,
-			Record:  component.healthAt(time.Now()),
-			HasLogs: true,
+			Name:          component.name,
+			Record:        component.healthAt(time.Now()),
+			HealthMetrics: component.enableHealthMetrics,
+			HasLogs:       true,
 		}
 		component.mu.RUnlock()
 		item.Rejected, item.SendFailures = component.logs.Counts()
