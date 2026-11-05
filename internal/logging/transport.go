@@ -98,31 +98,26 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 	return err
 }
 
-// connect 沿用首次成功连接的系统入口；显式路径保持传统 syslog，默认 Linux 优先 journal。
+// connect 的默认入口固定为专用 journal；显式路径按传统 syslog 协议连接。
 func (t *transport) connect(ctx context.Context) (net.Conn, wireProtocol, error) {
-	if t.path == "" && runtime.GOOS == "linux" {
-		conn, err := (&net.Dialer{}).DialContext(ctx, "unixgram", journalwire.SocketPath)
-		if err == nil {
-			return conn, journalNative, nil
-		}
-	}
-	paths := []string{t.path}
 	if t.path == "" {
-		paths = []string{"/dev/log", "/var/run/syslog", "/var/run/log"}
+		if runtime.GOOS != "linux" {
+			return nil, journalNative, fmt.Errorf("syslogger: 默认日志出口需要 Linux 的 %s journal 命名空间；其他平台请配置独立 SyslogSocketPath", journalwire.Namespace)
+		}
+		conn, err := (&net.Dialer{}).DialContext(ctx, "unixgram", journalwire.SocketPath)
+		return conn, journalNative, err
 	}
 	var lastErr error
-	for _, path := range paths {
-		for _, network := range []string{"unixgram", "unix"} {
-			conn, err := (&net.Dialer{}).DialContext(ctx, network, path)
-			if err == nil {
-				protocol := syslogDatagram
-				if network == "unix" {
-					protocol = syslogStream
-				}
-				return conn, protocol, nil
+	for _, network := range []string{"unixgram", "unix"} {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, t.path)
+		if err == nil {
+			protocol := syslogDatagram
+			if network == "unix" {
+				protocol = syslogStream
 			}
-			lastErr = err
+			return conn, protocol, nil
 		}
+		lastErr = err
 	}
 	return nil, syslogDatagram, lastErr
 }

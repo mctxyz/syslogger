@@ -15,6 +15,7 @@ import (
 func (opts options) journalArgs() []string {
 	args := []string{
 		"--no-pager",
+		"--namespace=" + journalwire.Namespace,
 		"--output=cat",
 		"--all",
 		"--since=" + opts.since,

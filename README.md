@@ -1,9 +1,9 @@
 # syslogger
 
-Go 1.23 本机 journal／syslog 日志与组件健康状态库，指标注册和导出使用 Prometheus 官方客户端。module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`。
+Go 1.23 本机日志与组件健康状态库，日志默认使用专用 journal 命名空间，指标注册和导出使用 Prometheus 官方客户端。module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`。
 
 ```text
-日志 → 模块独立 FIFO → 本机 journal／syslog → 设备保存、轮转、转发
+日志 → 模块独立 FIFO → mct-syslogger journal 命名空间 → 设备保存、轮转、转发
 状态 → 同步内存记录 → HTTP／.prom → Prometheus → Alertmanager
 ```
 
@@ -99,9 +99,9 @@ rpc.Healthy()
 
 正文实际为单行 JSON，时间为 UTC RFC3339Nano，等级为小写名称。顶层 error 字段使用 Error() 文本，nil 或空字段省略 fields。编码在调用线程完成，调用期间字段由业务保证无并发修改；返回后修改原字段不会改变已编码日志。出口使用 LOG_USER facility 和真实 severity，`SYSLOG_IDENTIFIER`／syslog tag 来自项目名；项目 tag 中的空白和控制字符规范化为下划线，JSON 身份保留原文。
 
-Linux 在建立连接时优先使用 `/run/systemd/journal/socket` 的原生 journal 协议，同时发送 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 三个独立原文身份字段，供 journal 索引检索；`MESSAGE` 保持上述完整 JSON 字节。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 拥有连接，连接和写入各使用一秒等待上限；普通异步调用线程只编码和入队。
+Linux 默认通过 `/run/systemd/journal.mct-syslogger/socket` 的原生 journal 协议写入固定的 `mct-syslogger` 命名空间，同时发送 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 三个独立原文身份字段，供 journal 索引检索；`MESSAGE` 保持上述完整 JSON 字节。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 拥有连接，连接和写入各使用一秒等待上限；普通异步调用线程只编码和入队。
 
-原生入口不可连接时继续发现本机 syslog 路径；其他平台沿用 syslog。显式 `SyslogSocketPath` 始终使用传统 syslog 协议，适用于已有转发入口及隔离测试。Linux 主机已有可访问的 journald 原生入口时，新增字段无需服务端注册或修改日志配置；设备的过滤、限流、留存和转发策略仍由部署方管理。
+专用命名空间由管理员在 systemd 245+ 主机上预先启用，独立管理存储和轮转，部署步骤见[专用 journal 配置](docs/journal.md)。默认入口不可连接时按发送失败处理，不自动转写默认 journal 或系统 syslog，原生 `log` 故障诊断继续保留。其他平台的默认发送返回不支持错误，可通过显式 `SyslogSocketPath` 接入独立传统 syslog 服务；自定义入口的隔离和转发策略由部署方保证。
 
 每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Config.DefaultQueueCapacity` 为管理器设置模块默认容量，零值为 512，合法范围为 1～4096，`New` 和 `SafeNew` 均可配置。`New` 拒绝非法默认容量，`SafeNew` 回退 512 并记录配置纠正。
 
@@ -128,7 +128,7 @@ rpc.Info("组件已注册", nil)
 
 普通异步方法在空组件句柄及缺少管理器时通过标准日志输出原有句柄警告，下一行输出采用相同事件格式的单行 JSON，保留等级、时间、消息及业务字段。此时项目和实例身份使用空字符串，组件名称存在时保留；警告与事件使用同一次 `log.Printf` 输出。业务字段编码失败时保留句柄警告，并在下一行输出编码失败原因。
 
-`SyslogSocketPath` 可指定部署或隔离测试的传统 syslog 路径。默认 Linux 先连接 journald 原生入口，再尝试 `/dev/log`、`/var/run/syslog`、`/var/run/log` 的 Unix datagram 和 stream；异步连接延迟到后台首次发送，同一组件复用成功连接，发送失败后在后续事件重新发现。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。
+`SyslogSocketPath` 可指定部署或隔离测试的传统 syslog 路径，按 Unix datagram、stream 顺序连接该路径；原生 journal socket 使用默认配置接入，不能填入这个传统协议选项。默认异步连接延迟到后台首次发送，同一组件复用成功连接，发送失败后在后续事件重新连接同一专用入口。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。标准库 `log` 仍承担独立故障诊断和无效组件句柄兜底，默认写入 stderr，被宿主收集后可能进入默认系统日志。
 
 ### 同步日志
 
@@ -160,9 +160,9 @@ go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
 ./tools/bin/mct-syslogger -p contract-listener -i local-a -c rpc -s=-2h -k '超时'
 ```
 
-CLI 将项目、实例、组件条件直接交给 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 原生字段索引，随后继续复核 JSON 正文。应用需升级 SDK 并重新部署以写入这些字段；身份筛选依赖对应原生字段，传统 syslog 出口的记录不具备这些索引。外部采集转发时也应保留三个身份字段。
+CLI 固定通过 `journalctl --namespace=mct-syslogger` 查询专用命名空间，将项目、实例、组件条件直接交给 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 原生字段索引，随后继续复核 JSON 正文。应用与 CLI 需配套升级，旧默认 journal 中的历史记录继续用普通 `journalctl` 查询，迁移说明见[专用 journal 配置](docs/journal.md#升级与排障)。身份筛选依赖对应原生字段，传统 syslog 出口的记录不具备这些索引；外部采集转发时也应保留三个身份字段。
 
-编译使用 Go 1.23+，运行环境为 Linux 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。
+编译使用 Go 1.23+，日志查询运行环境为 Linux、systemd 245+ 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。
 
 ### 本机日志名称目录
 

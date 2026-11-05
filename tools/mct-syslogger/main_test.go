@@ -154,6 +154,7 @@ func TestJournalArgs(t *testing.T) {
 	opts := testOptions(t, "--since=-2h", "--until", "2026-10-23 12:00:00; literal")
 	want := []string{
 		"--no-pager",
+		"--namespace=mct-syslogger",
 		"--output=cat",
 		"--all",
 		"--since=-2h",
@@ -653,6 +654,10 @@ func TestLargeAndFinalLines(t *testing.T) {
 // TestMain 在子进程中模拟 journalctl，测试路径只包含该辅助进程。
 func TestMain(m *testing.M) {
 	if os.Getenv("SYSLOGGER_LOG_TEST_HELPER") == "1" {
+		if got := journalMatchValues(os.Args[1:], "--namespace="); !reflect.DeepEqual(got, []string{"mct-syslogger"}) {
+			fmt.Fprintf(os.Stderr, "journal namespace mismatch: %q\n", got)
+			os.Exit(2)
+		}
 		if os.Getenv("SYSLOGGER_LOG_TEST_MODE") == "fail" {
 			fmt.Fprintln(os.Stderr, "journal permission denied")
 			os.Exit(7)

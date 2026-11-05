@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 type optionName struct {
@@ -91,6 +92,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(output, "    时间格式为 YYYY-MM-DD HH:MM:SS，无表头；项目保持单行，实例描述继续跟在名称后。")
 	fmt.Fprintln(output, "    由启用 CatalogEnabled 的 SDK 按成功接收日志建立，包含异步入队及同步发送，逐组件过滤一年未活跃项。")
 	fmt.Fprintln(output, "    SDK 每 10 分钟同步并在关闭时最终保存；--json 包含创建时间、活跃时间和累计接收量。")
+	fmt.Fprintf(output, "\n日志查询固定读取 %s journal 命名空间，专用实例由管理员预先启用。\n", journalwire.Namespace)
 
 	writer := tabwriter.NewWriter(output, 30, 4, 2, ' ', 0)
 	for _, group := range optionGroups {
@@ -210,7 +212,8 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 无结果与权限排查：
   1. 默认只查最近 1 小时；查启动记录或较早事件时，先扩大 -s，如 -s=-24h -n 0。
   2. 用 --list 核对身份原文，逐步减少身份、等级和内容条件；目录退出后仍保留。
-  3. 日志查询需要 Linux、journalctl 和 journal 读取权限；可见范围受权限及留存策略影响。
+  3. 日志查询需要 Linux、systemd 245+、journalctl 和 journal 读取权限；可见范围受权限及留存策略影响。
+     可使用 journalctl --namespace=mct-syslogger 核对专用日志；旧默认 journal 历史用普通 journalctl 查看。
      工具只展示符合 syslogger 结构的 JSON 正文，目录缺省时仍可手动指定身份查询。
   4. 需要提升读取权限时，可使用 sudo mct-syslogger ...。
      管理员也可将普通用户加入 systemd-journal 组：

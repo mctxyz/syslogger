@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-// 非 Linux 平台继续使用 syslog；保留该边界使共享发送流程可跨平台编译。
+// 非 Linux 平台通过显式 SyslogSocketPath 使用传统协议，原生 journal 写入返回不支持。
 func writeJournal(conn *net.UnixConn, data []byte) error {
 	return syscall.EPROTONOSUPPORT
 }

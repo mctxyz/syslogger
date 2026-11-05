@@ -1,6 +1,6 @@
 # 日志检索工具
 
-`mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询以模块的原生 journal JSON 正文为输入契约，通过 `journalctl` 的项目、实例、组件和等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要使用 systemd journal 的 Linux 及相应读取权限。
+`mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询固定读取 `mct-syslogger` journal 命名空间，以模块的原生 journal JSON 正文为输入契约，通过 `journalctl` 的项目、实例、组件和等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要 Linux、systemd 245+、journalctl 及相应读取权限，专用命名空间的准备见[部署说明](../docs/journal.md)。
 
 ## 运行与快捷命令
 
@@ -34,6 +34,8 @@ sudo usermod -aG systemd-journal username
 ```
 
 退出并重新登录后组权限生效。命令的 `--help` 同时提供这一配置示例。
+
+日志查询统一向 `journalctl` 传入 `--namespace=mct-syslogger`，身份、等级、时间及跟踪参数继续按下文组合。专用存储、容量和轮转独立于默认 journal；原生 `log` 兜底继续由宿主程序的 stderr／标准日志配置接管。SDK 与 CLI 需配套升级，旧默认 journal 历史仍可使用普通 `journalctl` 查看。
 
 ## 查看项目、实例与组件目录
 
@@ -132,7 +134,7 @@ slog -i local-a -n 500 --json
 
 | 参数 | 含义 |
 | --- | --- |
-| `-p / --project PROJECT` | 先按模块项目 tag 预筛，再按 JSON `project` 原文精确匹配，可重复（OR） |
+| `-p / --project PROJECT` | 先按 `SYSLOGGER_PROJECT` 原生索引预筛，再按 JSON `project` 原文精确匹配，可重复（OR） |
 | `-i / --instance-id INSTANCE` | JSON `instance_id` 原文精确匹配，可重复（OR） |
 | `-c / --component COMPONENT` | JSON `component` 原文精确匹配，可重复（OR） |
 | `-l / --level LEVEL` | 最低严重程度阈值，显示该等级及更严重等级；默认 `debug`（全部等级），重复时最后一个生效 |
@@ -161,7 +163,7 @@ slog -i local-a -n 500 --json
 - 普通查询默认取最新 100 条匹配日志，再按 journal 从旧到新显示；`-n 0` 流式显示范围内全部匹配日志。数量限制在所有过滤之后执行。
 - 跟踪默认输出起始时间以来的全部匹配历史并继续读取新日志，条数不限；只看新日志时用 `--since now -f`。`--until` 用于固定范围查询，与 `--follow` 分别使用。
 - 自动化跟踪宜显式指定正数 `-n`；匹配不足时仍会持续等待，调用方可另设执行时限。查询较早的事件时，同时扩大 `-s`，因为 `-n 0` 只改变条数上限。
-- 模块在 Linux 默认优先原生 journal，保留 `SYSLOG_IDENTIFIER` 项目 tag、LOG_USER 和 `PRIORITY`，并以 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 保存原文身份。显式自定义 syslog socket 及无原生入口的平台继续使用传统 syslog；JSON 正文保持一致。
+- 模块在 Linux 默认写入 `mct-syslogger` 专用原生 journal，保留 `SYSLOG_IDENTIFIER` 项目 tag、LOG_USER 和 `PRIORITY`，并以 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 保存原文身份。专用入口失败不自动转写默认 journal 或系统 syslog，原生 `log` 故障诊断保持现状。显式自定义 syslog socket 使用传统协议，JSON 正文保持一致；其他平台也需显式提供独立入口。
 - 工具按原生身份字段与最终等级直接预筛，同字段重复匹配取 OR，不同字段取 AND。应用需升级 SDK 并重新部署，外部采集转发须保留三个 `SYSLOGGER_*` 身份字段；身份查询依赖这些字段。无需筛选身份时维持全范围读取；空等级集合仍保留 journalctl 的校验和错误反馈。
 - 发送器与查询工具共享原生字段名，项目按原文匹配；Go 继续复核全部正文身份、等级和内容，避免不一致元数据混入结果。journalctl 保持不限原生条数，达到全部筛选后的匹配上限才停止读取，普通查询、跟踪、JSON 和输出顺序保持原契约。
 - 查询先一次提取基础字段并组合判断项目、实例、组件和等级，再逐项检查 message；内容条件需要访问 fields 或可读输出需要显示它时，才展开业务字段。fields 的规范化 JSON 至多编码一次，供全部内容条件和显示复用；`--json` 保留原文，message 已满足全部内容条件时可跳过 fields 展开。整行语法和字段类型在输出与计数前校验，数字精度、字段键排序和转义规则保持一致。
