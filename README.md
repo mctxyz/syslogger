@@ -1,359 +1,90 @@
 # syslogger
 
-Go 1.23 本机日志与组件健康状态库，日志默认使用专用 journal 命名空间，指标注册和导出使用 Prometheus 官方客户端。module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`。
+Go 1.23 本机结构化日志与组件健康状态库，配套 `mct-syslogger` 命令工具。日志使用专用 journal 命名空间，指标使用 Prometheus 官方客户端。
 
 ```text
-日志 → 模块独立 FIFO → mct-syslogger journal 命名空间 → 设备保存、轮转、转发
-状态 → 同步内存记录 → HTTP／.prom → Prometheus → Alertmanager
+日志 → 组件独立队列 → mct-syslogger journal 命名空间
+状态 → 内存记录 → HTTP／.prom → Prometheus
 ```
 
-## 身份与接入
+## 命令工具安装与初始化
 
-```go
-import "github.com/mctxyz/syslogger"
+支持 Linux amd64／arm64，需要 systemd 245+、交互终端及 root 或 sudo：
+
+```bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash'
 ```
 
-日志和内置指标共用 `project、instance_id、component`。业务代码固定项目名和组件名，二者保留非空白且合法 UTF-8 的原文；业务入口从配置文件等来源读取实例 ID 后传给库，空实例 ID 使用 `common`，显式非空值按 3～128 字节和 UTF-8 校验并保留原文。
+脚本下载并校验最新 Release，询问**安装前缀**（默认 `/usr/local`）、**已有本地运行账户**（必填）和 **journal 持久化总容量**（默认 `5G`），确认后安装并执行 `init`。命令默认安装到 `/usr/local/bin/mct-syslogger`。
 
-下方为初始化片段，业务在 New 成功后接管管理器的关闭职责，后续初始化失败也按自己的流程调用 Close 收尾。
+初始化会调整目录权限并重启专用 journald 实例。首次迁移前停止旧版业务进程，完成后重新登录或重启业务服务；缩小容量可能清理旧归档，失败时已完成步骤保留。
 
-```go
-manager, err := syslogger.New(syslogger.Config{
-    Project: "contract-listener",
-    InstanceID: instanceID,
-    StateEnabled: true,
-    HTTP: syslogger.HTTPConfig{Enabled: true, ListenAddr: ":9091"},
-})
-if err != nil {
-    return err
-}
-rpc, err := manager.Register(syslogger.ComponentConfig{
-    Name: "rpc",
-    Description: "区块与日志获取",
-    EnableHealthMetrics: true,
-    QueueCapacity: 512,
-})
-if err != nil {
-    return err
-}
-if err := manager.StartHTTP(); err != nil {
-    return err
-}
-rpc.Unhealthy()
-```
+源码中可运行 `bash tools/install/install.sh`，帮助使用 `bash tools/install/install.sh --help`。依赖、手工下载和完整安装说明见 [工具文档](tools/README.md#release-下载与安装)。
 
-已有服务器通过 `Handler()` 挂载，服务器归业务管理。模块在取得 Handler、开始启动指标出口或首次通过 Registry 采集之前完成注册；配置及组件集合之后固定。模块注册后日志即可使用，业务退出时调用 `Close(ctx)`。
+## 接入 SDK
 
-同一项目的并行实例应显式提供不同 ID，跨重启复用。多个实例使用 common 会共享逻辑身份；各实例的指标文件路径由接入方分别配置。
-
-### 容错初始化
-
-`New(Config) (*Manager, error)` 严格校验配置。需要在配置异常时继续运行，可使用 `SafeNew(Config) *Manager`：
-
-```go
-manager := syslogger.SafeNew(syslogger.Config{
-    Project: "contract-listener",
-    InstanceID: instanceID,
-    StateEnabled: true,
-})
-```
-
-`SafeNew` 使用纠正后的配置副本创建完整的管理器，组件注册、日志提交、状态维护及关闭流程与 `New` 共用实际实现。后续 `Register`、`Handler`、`StartHTTP`、`StartFile` 和 `Close` 继续按各自契约返回错误，例如出口关闭、端口占用、目录不存在或管理器已关闭。
-
-| 配置场景 | 有效配置及诊断 |
-| --- | --- |
-| `Project` 为空字符串 | 使用 `common`，记录 Warning |
-| `Project` 非空但不合法 | 使用 `unknown`，记录 Warning |
-| `InstanceID` 为空字符串 | 正常使用默认值 `common` |
-| `InstanceID` 非空但不合法 | 使用 `common`，记录 Warning |
-| `Registry` 注册内置 Collector 失败 | 使用独立 Registry，记录 Error；调用方原注册表保持原样 |
-| `DefaultQueueCapacity` 为零 | 正常使用默认值 512 |
-| `DefaultQueueCapacity` 为负或大于 4096 | 回退 512，记录 Warning |
-| 指标文件已启用，但 `OutputPath` 为空或全空白 | 停用指标文件出口，记录 Error；HTTP 和 syslog 配置保持原样 |
-| 指标文件已启用，刷新间隔为负 | 回退 10 秒，记录 Warning |
-| 指标文件已启用，刷新间隔为零 | 正常使用默认值 10 秒 |
-| 队满自动降级已启用，`QueueFullRecoveryInterval` 为负 | 回退 30 秒，记录 Warning |
-| 队满自动降级已启用，`QueueFullRecoveryInterval` 为零 | 正常使用默认值 30 秒 |
-| 纠正后仍有指标出口或队满自动降级启用，但状态维护关闭 | 自动开启 `StateEnabled`，记录 Warning |
-
-合法身份保留原文，多个非法身份可能共享同一回退身份。已关闭的指标文件配置沿用原有处理语义；状态依赖根据纠正后仍启用的指标出口和队满自动降级功能补齐。
-
-每项异常首先由标准库 `log.Printf` 输出，默认写入 stderr，接入方可通过标准日志配置调整目标。库同时通过独立的初始化诊断队列，尝试以 `component="syslogger_manager"` 交付结构化 Warning／Error syslog 日志，业务字段包含 `state="unhealthy"`、字段名、原因和纠正结果。该队列由管理器关闭，补充诊断交付失败通过标准日志反馈。
-
-开启状态维护时，发生配置纠正的管理器持续显示 `Unhealthy`（3），后续组件注册成功保持该配置异常事实。正常采用默认值保持正常初始化状态；HTTP、指标文件仍按原有方式显式接入或启动，系统日志留存及外部资源可用性由对应环境决定。
-
-## 日志
-
-普通异步方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields Fields)`，无返回值，字段可传 nil。`Fields` 是以 `map[string]any` 为底层类型的结构化业务字段类型，调用方使用 `syslogger.Fields` 构造字段；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
-
-```go
-rpc.Info("RPC 已连接", syslogger.Fields{
-    "endpoint": "primary",
-})
-rpc.Healthy()
-```
-
-```json
-{"timestamp":"2026-10-22T08:00:00Z","level":"error","project":"contract-listener","instance_id":"common","component":"rpc","message":"RPC 请求超时","fields":{"error":"context deadline exceeded","duration_ms":3000}}
-```
-
-正文实际为单行 JSON，时间为 UTC RFC3339Nano，等级为小写名称。顶层 error 字段使用 Error() 文本，nil 或空字段省略 fields。编码在调用线程完成，调用期间字段由业务保证无并发修改；返回后修改原字段不会改变已编码日志。出口使用 LOG_USER facility 和真实 severity，`SYSLOG_IDENTIFIER`／syslog tag 来自项目名；项目 tag 中的空白和控制字符规范化为下划线，JSON 身份保留原文。
-
-Linux 默认通过 `/run/systemd/journal.mct-syslogger/socket` 的原生 journal 协议写入固定的 `mct-syslogger` 命名空间，同时发送 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 三个独立原文身份字段，供 journal 索引检索；`MESSAGE` 保持上述完整 JSON 字节。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 拥有连接，连接和写入各使用一秒等待上限；普通异步调用线程只编码和入队。
-
-专用命名空间由管理员在 systemd 245+ 主机上预先启用，独立管理存储和轮转，部署步骤见[专用 journal 配置](docs/journal.md)。默认入口不可连接时按发送失败处理，不自动转写默认 journal 或系统 syslog，原生 `log` 故障诊断继续保留。其他平台的默认发送返回不支持错误，可通过显式 `SyslogSocketPath` 接入独立传统 syslog 服务；自定义入口的隔离和转发策略由部署方保证。
-
-每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Config.DefaultQueueCapacity` 为管理器设置模块默认容量，零值为 512，合法范围为 1～4096，`New` 和 `SafeNew` 均可配置。`New` 拒绝非法默认容量，`SafeNew` 回退 512 并记录配置纠正。
-
-`Register(ComponentConfig)` 按 `Name` 建立模块，`Description` 用于日志名称目录展示。`QueueCapacity` 为 1～4096 时使用原值，零值及其他值采用管理器默认容量。例如：
-
-```go
-manager := syslogger.SafeNew(syslogger.Config{
-    Project: "demo",
-    DefaultQueueCapacity: 1024,
-})
-rpc, err := manager.Register(syslogger.ComponentConfig{
-    Name: "rpc",
-    Description: "区块与日志获取",
-})
-if err != nil {
-    return err
-}
-rpc.Info("组件已注册", nil)
-```
-
-普通队列满时立即拒收新日志，更新拒收 Counter 并通过标准日志诊断，已接收的队列记录保持 FIFO。发送成功只表示本机 socket 写入成功，中心接收和持久化由设备日志链路管理。
-
-普通异步调用的编码失败、队满或管理器关闭后拒收，通过标准库 `log.Printf` 输出独立诊断，并累计模块拒收次数；提交诊断按模块每秒最多输出一次，Counter 保留全部次数。后台连接或写入失败沿用独立标准日志诊断和发送失败 Counter，失败条目即放弃。连接恢复服务后续日志，不重放失败记录。本机连接及写入等待各受有限超时约束，业务前台仍承担编码和必要的标准日志输出成本，库不承诺硬实时调用上限。
-
-普通异步方法在空组件句柄及缺少管理器时通过标准日志输出原有句柄警告，下一行输出采用相同事件格式的单行 JSON，保留等级、时间、消息及业务字段。此时项目和实例身份使用空字符串，组件名称存在时保留；警告与事件使用同一次 `log.Printf` 输出。业务字段编码失败时保留句柄警告，并在下一行输出编码失败原因。
-
-`SyslogSocketPath` 可指定部署或隔离测试的传统 syslog 路径，按 Unix datagram、stream 顺序连接该路径；原生 journal socket 使用默认配置接入，不能填入这个传统协议选项。默认异步连接延迟到后台首次发送，同一组件复用成功连接，发送失败后在后续事件重新连接同一专用入口。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。标准库 `log` 仍承担独立故障诊断和无效组件句柄兜底，默认写入 stderr，被宿主收集后可能进入默认系统日志。
-
-### 同步日志
-
-八个等级分别提供 `EmergencySync、AlertSync、CriticalSync、ErrorSync、WarningSync、NoticeSync、InfoSync、DebugSync`，签名统一为 `(ctx context.Context, message string, fields Fields) error`。同步方法使用相同身份、JSON 编码和 journal／syslog 协议，每次建立独立短连接，在当前调用中完成发送尝试并关闭连接，适用于退出前的关键事件。
-
-同步调用直接发送，普通队列容量不影响其接收；它可以先于积压记录发送，并发同步调用之间也不承诺顺序。`ctx` 必须非 nil，可取消连接和写入；未设置更短期限时，连接和写入仍各受一秒上限约束。JSON 编码及匿名内存文件的准备不承诺硬实时取消。返回 nil 仅表示写入本机 socket，不代表 journald 持久化或中心接收。
-
-编码、无效上下文、预先取消或关闭拒收累计接收前拒收次数；通过接收检查后的连接、写入或取消失败累计发送失败次数。同步调用直接返回错误，由业务处理诊断和退出。关闭后的调用返回 `ErrClosed`；已接收调用纳入 `Close` 等待，关闭期限到达时中断同步发送。普通异步方法和业务健康状态保持原有行为。
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-err := rpc.ErrorSync(ctx, "无法继续运行", syslogger.Fields{"error": cause})
-cancel()
-if err != nil {
-    fmt.Fprintf(os.Stderr, "无法继续运行；日志发送失败：%v\n", err)
-}
-os.Exit(1)
-```
-
-退出由业务显式调用；`os.Exit` 不执行 defer，需要完整收尾时，应在退出前使用新的有效上下文调用 `manager.Close`。同步调用只交付本条日志，不负责排空普通队列或立即保存目录活动。
-
-### 日志检索
-
-[tools/mct-syslogger](tools/mct-syslogger) 提供独立 Go 命令，支持项目／实例／组件目录、日志过滤、实时跟踪、彩色输出和 JSON 输出：
-
-```sh
-go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
-./tools/bin/mct-syslogger --list
-./tools/bin/mct-syslogger -p contract-listener -i local-a -c rpc -s=-2h -k '超时'
-```
-
-CLI 固定通过 `journalctl --namespace=mct-syslogger` 查询专用命名空间，将项目、实例、组件条件直接交给 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 原生字段索引，随后继续复核 JSON 正文。应用与 CLI 需配套升级，旧默认 journal 中的历史记录继续用普通 `journalctl` 查询，迁移说明见[专用 journal 配置](docs/journal.md#升级与排障)。身份筛选依赖对应原生字段，传统 syslog 出口的记录不具备这些索引；外部采集转发时也应保留三个身份字段。
-
-编译使用 Go 1.23+，日志查询运行环境为 Linux、systemd 245+ 和 journalctl。Linux amd64、arm64 预编译包由 tag 发布流程上传到 [GitHub Releases](https://github.com/mctxyz/syslogger/releases)；下载校验、安装、用法与快捷命令设置见 [工具说明](tools/README.md)。
-
-### 本机日志名称目录
-
-`CatalogEnabled` 默认关闭，开启后将实际使用的日志身份、描述和累计量发布到固定的 `/var/lib/mct-syslogger`，与 `TMPDIR`、状态维护及指标出口配置独立。部署时先使用配套 CLI 的独立子命令准备目录权限及专用 journal，将 `appuser` 替换为已有的程序运行账户：
-
-```sh
-sudo mct-syslogger init --user appuser
-# 持久化日志总容量默认 5G，也可以明确指定。
-sudo mct-syslogger init --user appuser --journal-max-use 10G
-```
-
-初始化需要 Linux、systemd 245+ 及 root，完成后重新登录或重启业务服务刷新组身份。首次迁移前先停止旧版写入进程；容量、压缩和管理员配置保护见[部署说明](docs/journal.md)。业务开启目录功能的示例：
+导入 `context` 和 `github.com/mctxyz/syslogger`。以下片段放在返回 `error` 的业务函数中，管理器的生命周期应覆盖业务使用期；示例显式开启名称目录，需要先完成主机初始化。
 
 ```go
 manager, err := syslogger.New(syslogger.Config{
-    Project: "contract-listener",
-    InstanceID: "mainnet-a",
-    InstanceDescription: "主网事件监听",
+    Project: "myapp",
+    InstanceID: "main",
     CatalogEnabled: true,
 })
 if err != nil {
     return err
 }
 defer manager.Close(context.Background())
+
 rpc, err := manager.Register(syslogger.ComponentConfig{
     Name: "rpc",
     Description: "区块与日志获取",
-    QueueCapacity: 512,
 })
 if err != nil {
     return err
 }
-rpc.Info("RPC 已连接", nil)
+rpc.Info("RPC 已连接", syslogger.Fields{"endpoint": "primary"})
 ```
 
-组件首次成功接收日志时通知后台建立目录记录，接收包含异步入队和同步开始发送；管理器初始化、组件注册及健康报告保持各自职责，名称目录由实际接收活动建立。容错初始化产生的结构化诊断使用 `syslogger_manager`，同样按成功入队进入目录。描述供目录展示，日志及指标继续使用原有身份。
+`New` 严格校验配置；需要纠正配置后继续运行时使用 `SafeNew`。完整配置、注册顺序和关闭语义见 [SDK 接入](docs/sdk.md)。
 
-清单按项目和实例保存 JSON，项目目录名为项目原文的 SHA-256 十六进制摘要，实例文件名为实例 ID 的 SHA-256 十六进制摘要加 `.json`。实例保存 `created_at`；组件保存 `name`、`description`、`created_at`、`last_active_at` 和 `log_count`，存储时间使用 UTC。固定长度路径兼容现有身份中的斜杠、空白及长项目名，CLI 用身份原文组织目录。项目和实例保持原有单行展示；组件首行在名称后显示完整本地时间及 `累计: 数量`，时间列按选中组件的名称显示宽度对齐，数量左对齐并使用逗号千位分组，组件描述另起一行与时间列对齐，不加表头。可读时间按设备系统时区显示为 `YYYY-MM-DD HH:MM:SS`，JSON 输出保留原有 UTC 时间及整数精度。
+## 查询日志
 
-每个组件通过独立的 `atomic.Uint64` 累计成功接收增量，后台每 10 分钟取走活动窗口并合并文件中的历史数量；失败窗口合回内存，下个周期继续处理。文件中的 `log_count` 表示从该组件记录创建开始的 SDK 接收量，包含异步入队及同步开始发送，类型为 `uint64`，达到最大值后自然回绕为零。后续发送失败或关闭时放弃的日志仍在接收量内；编码、上下文、队满或关闭等接收前拒绝不计。该数量与 journal 当前留存条数分别解释。
-
-根目录及项目目录使用 `mct-syslogger` 组和 `2775` 权限，JSON 文件及项目 `.catalog.lock` 为 `0664`。root 与指定运行账户可写，其他账户只读；setgid 让新建对象逐层继承共享组。全局根目录由 `init` 准备，SDK 只创建其中的项目目录和文件，新对象由当前运行账户持有，既有对象的所有权保持稳定。发布和清理通过 [gofrs/flock v0.12.1](https://github.com/gofrs/flock/tree/v0.12.1) 协调项目文件锁，在锁内读取、合并增量并使用同目录临时文件原子替换；同身份多进程的累计量合并保存。项目锁文件保持稳定，日志调用线程只维护内存活动，文件 I/O 在后台执行。
-
-目录缺失、权限不足或发布／清理失败通过标准日志诊断；开启状态维护时，仅内置 `syslogger_manager` 因目录不可用而降级。业务组件健康、日志发送、指标出口及业务关闭结果保持独立。失败增量留在内存并按原周期重试；空闲周期也复查根目录，使初始化完成后的恢复不依赖新增日志。发布与清理分别恢复，注册及配置故障仍按各自条件恢复；关闭状态维护时只诊断，关闭目录功能时不检查。目录不可用期间，`--list` 可能为空或显示旧记录，已知身份仍可直接用于日志查询。
-
-`Close` 在日志队列及同步调用收尾后完成最终同步并停止目录后台任务，保留未过期历史记录；异常退出可能丢失最近一次成功同步后尚未保存的增量。重启继续合并已有计数和创建时间。组件按最后一次成功接收时间判断一年有效期，轮询本身不续期，其他组件的活动也不为静默组件续期；全部组件超过物理清理窗口后删除实例 JSON。宽限期内记录继续存续并合并新增数量，过期记录实际移除后再次有日志时按新记录累计。
-
-SDK 每 10 分钟清理过期记录，物理清理额外保留一个同步周期，给过期前已成功接收、尚未刷盘的活动保留合并机会；合并按实际接收时刻判断生命周期是否连续。全部接入应用退出后暂停物理清理，后续 SDK 运行时继续。CLI 的 `--list` 始终按一年活动期限过滤过期项，物理宽限不延长显示期限；名称目录用于选择历史日志过滤条件，journal 日志仍按其自身留存范围查询，也可手动指定身份。目录历史数据与旧目录由部署方自行处理。
-
-## 健康与指标
-
-`Healthy()`、`Degraded()`、`Unhealthy()` 无参数、无返回值，同步提交业务状态及库采集的时间。状态维护默认关闭，关闭时这些方法直接返回；日志与业务状态分别调用。四态为 0=Unknown、1=Healthy、2=Degraded、3=Unhealthy，Unknown 表示组件尚未形成业务或自动健康报告。较新业务入口时间整体替换业务记录，相同时间由后提交者覆盖，同状态也更新时间。
-
-### 逐组件健康指标
-
-`ComponentConfig.EnableHealthMetrics` 控制该组件是否导出 `syslogger_component_state` 和 `syslogger_component_timestamp_seconds`，默认 `false` 不输出这两项样本，需要时在注册阶段显式开启：
-
-```go
-rpc, err := manager.Register(syslogger.ComponentConfig{
-    Name: "rpc",
-    EnableHealthMetrics: true,
-})
-if err != nil {
-    return err
-}
-runtime, err := manager.Register(syslogger.ComponentConfig{Name: "runtime"})
-if err != nil {
-    return err
-}
-rpc.Healthy()
-runtime.Info("进程已启动", nil)
-```
-
-该选项只控制导出，注册后固定：全局 `Config.StateEnabled` 仍控制健康记录维护，`DegradeOnQueueFull` 仍按原规则更新有效状态；显式开启导出但状态维护关闭时，健康样本保持初始 Unknown/0。两个日志 Counter 始终按原日志路径维护并参与采集，日志发送、同步日志及名称目录累计量不受此选项影响。管理器内置 `syslogger_manager` 的健康指标继续遵守原有全局状态配置。
-
-HTTP、文件和外部共享 Registry 使用同一个 Collector，按组件采用相同的导出选择。升级前已依赖组件健康指标的调用方，需要为对应注册补充 `EnableHealthMetrics: true`；未启用的组件没有这两项样本，而不是输出零值。
-
-### 队满自动降级
-
-```go
-manager := syslogger.SafeNew(syslogger.Config{
-    Project: "contract-listener",
-    StateEnabled: true,
-    DegradeOnQueueFull: true,
-    QueueFullRecoveryInterval: 30 * time.Second,
-})
-```
-
-`DegradeOnQueueFull` 默认关闭，启用时需要 `StateEnabled`。`QueueFullRecoveryInterval` 指定连续无队满丢弃的恢复等待时间，零值为 30 秒；`New` 拒绝负值，`SafeNew` 回退默认值并报告配置纠正。
-
-各组件首次队满丢弃时产生自动 Degraded，再次队满丢弃重新计算恢复窗口；连续达到配置时长没有队满丢弃后，自动状态恢复 Healthy。恢复由最后一次队满时刻决定，窗口内成功接收日志或停止产生日志都可以自然到达恢复时刻；队列积压继续按原有发送流程交付。
-
-业务主动上报的 Degraded 或 Unhealthy 持续优先，只有业务主动上报 Healthy 才解除该业务故障。有效状态同时包含仍生效的队满降级，因此窗口内调用 Healthy 后仍显示 Degraded，窗口结束后才显示 Healthy。编码失败、关闭后调用及后台发送失败继续使用各自的诊断和 Counter；自动恢复窗口由队满丢弃事件更新。
-
-采集使用业务健康记录及最后队满时刻计算有效状态，HTTP 请求、周期文件快照和管理器内部采集使用同一规则。自动降级时间是最后队满时刻，自动恢复时间是该时刻加恢复窗口；最近的业务 Healthy 汇报继续保留其时间。首次关闭冻结当时的有效状态，最终文件快照及后续内部采集保持该截止结果。
-
-### 指标出口
-
-每个组件独立读写锁，采集复制单组件完整记录后释放锁，输出 I/O 在锁外执行。内置组件 `syslogger_manager` 表达管理器初始化、注册失败及实际注册恢复，具体来源走独立诊断。
-
-| 指标 | 类型 | 含义 |
-| --- | --- | --- |
-| `syslogger_component_state` | Gauge | 当前四态数值 |
-| `syslogger_component_timestamp_seconds` | Gauge | 当前有效健康记录的 Unix 整数秒，尚无健康报告时为 0 |
-| `syslogger_component_log_rejected_total` | Counter | 模块接收前拒收的调用累计次数 |
-| `syslogger_component_log_send_failures_total` | Counter | 模块异步及同步发送失败的条目累计数 |
-
-内置样本带上述三个身份标签。业务组件始终输出两个日志 Counter，显式开启 `EnableHealthMetrics` 后再输出状态和状态时间，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
-
-官方文本编码为状态指标族输出一条共享的 HELP 注释，所有组件的状态样本共用数值说明；HTTP 与 `.prom` 文件均包含该注释：
-
-```text
-# HELP syslogger_component_state 组件健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。
-# TYPE syslogger_component_state gauge
-```
-
-### 共享业务指标
-
-`Manager` 实现官方 `prometheus.Collector`，直接读取现有健康记录和日志计数。`Config.Registry` 接收官方 `*prometheus.Registry`；省略时创建管理器独立的注册表，`manager.Registry()` 返回实际使用的注册表。默认表仅包含 syslogger 的 Collector，Go 和进程指标可由业务按需注册。
-
-业务可在同一注册表中注册官方 GaugeVec、Counter、Histogram 等 Collector，指标保留自己的名称、标签及更新生命周期：
-
-```go
-registry := prometheus.NewRegistry()
-manager, err := syslogger.New(syslogger.Config{
-    Project: "contract-listener",
-    StateEnabled: true,
-    Registry: registry,
-    HTTP: syslogger.HTTPConfig{Enabled: true},
-})
-if err != nil {
-    return err
-}
-defer manager.Close(context.Background())
-rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacity: 512, EnableHealthMetrics: true})
-if err != nil {
-    return err
-}
-rpc.Healthy()
-
-height := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-    Name: "alertdog_node_height",
-    Help: "节点高度",
-}, []string{"chain", "source"})
-manager.Registry().MustRegister(height)
-height.WithLabelValues("eth", "primary").Set(123)
-
-handler, err := manager.Handler()
-if err != nil {
-    return err
-}
-mux.Handle("/metrics", handler)
-```
-
-该片段使用 `context`、`github.com/prometheus/client_golang/prometheus` 和已有的 `*http.ServeMux`。业务继续负责 RPC 探测及指标更新；syslogger 的 HTTP 与 `.prom` 文件出口通过同一个 Registry 采集并使用官方文本编码。两次采集之间数值可能变化，导出的指标集合及标签规则一致。
-
-已有 `promhttp.HandlerFor(registry, promhttp.HandlerOpts{})` 可直接导出共享表，syslogger 只需开启 `StateEnabled` 维护健康记录。已有 `promhttp.Handler()` 使用 `prometheus.DefaultGatherer`，可将对应的同一个 `*prometheus.Registry` 传入 `Config.Registry`。`prometheus.DefaultRegisterer` 的类型是 `prometheus.Registerer` 接口，使用前需确认具体注册表及其与 Gatherer 的对应关系；显式创建并共享 Registry 更便于隔离和管理生命周期。
-
-首次采集固定 syslogger 的组件集合，业务 Collector 仍可按官方规则动态注册、注销和更新。自定义 Collector 应支持并发采集，并在采集中读取及时可用的内存数据；HTTP 和文件交付会等待 Collector 完成。内置指标的项目和实例为常量标签，不同身份的管理器可以共用 Registry。同一身份或不兼容的指标描述符冲突由 `New` 返回官方注册错误；`SafeNew` 回退独立表后，接入方通过 `manager.Registry()` 取得实际表。
-
-### HTTP 与文件交付
-
-HTTP 与文件出口默认关闭，启用时须同时开启 StateEnabled。`StartHTTP()` 同步绑定后后台提供 `/metrics`。`StartFile()` 首次同步写入完整快照，成功后周期刷新，周期默认 10 秒。两个出口各自启动，失败可显式再次尝试，重复启动返回错误。
-
-采集或编码失败时通过标准日志诊断，HTTP 返回 500，文件保留上一次完整快照；首次文件采集失败由 `StartFile` 返回错误，最终采集失败由 `Close` 返回错误。
-
-文件出口通过 `Config.File.OutputPath` 指定完整路径及文件名，父目录由接入方准备；相对路径基于当前工作目录。例如：
-
-```go
-fileConfig := syslogger.FileConfig{
-    Enabled: true,
-    OutputPath: "/var/lib/node_exporter/textfile_collector/listener-a.prom",
-}
-```
-
-将该配置赋给 `Config.File`。库按给定路径交付文件；不同实例应配置不同路径，同一路径的写入会互相覆盖。供 node_exporter 采集的文件应使用 `.prom` 扩展名。
-
-写入沿用同目录临时文件、0644、完整关闭后 Rename，失败保留旧完整文件。汇报时间不是文件刷新时间，文件新鲜度结合 node_exporter 的 textfile mtime 解释；同时采集 HTTP 和文件时应避免重复聚合。
-
-### 现有采集目录迁移
-
-切换到指定路径后，已有的哈希命名指标文件仍会保留。接入方应按精确实例及文件路径核对旧文件，并在确认后移出采集目录，避免新旧文件重复采集。
-
-## 关闭与验证
-
-首次 `Close(ctx)` 建立接收截止，并以该上下文限制日志排空及已接收的同步发送；到期取消连接、释放积压记录并反馈未完成交付。只关闭库拥有的 HTTP 服务器，外部服务持有的 syslogger Handler 随后返回 503。已成功启动的文件出口串行写入最终快照并保留文件，未启动的出口保持原状态。最终快照之后注销自身 Collector，业务 Collector 和外部 promhttp 服务继续由调用方管理。重复 Close 复用收尾结果，后续 ctx 只限制本次等待。Collector 采集、文件系统和独立错误输出的底层 I/O 不承诺硬实时可取消。
+先查看目录，再用实际的项目、实例和组件名称查询。下方身份与 SDK 示例对应：
 
 ```sh
-go test ./...
-go vet ./...
-go test -race ./...
+mct-syslogger --list
+mct-syslogger -p myapp -i main -c rpc -s=-2h
+mct-syslogger -p myapp -i main -s now -f
 ```
 
-测试使用独立临时 socket 和目录，不写真实系统日志；环境中有 promtool 时自动检查实际编码的指标样本。真实 journald／rsyslog、日志中心、Prometheus／Alertmanager 联调和业务接入按对应环境授权另行验收。
+`--json` 适合脚本，`--help` 查看完整参数。筛选、输出及排障示例见 [命令工具](tools/README.md)。
+
+## 使用约定
+
+- **身份**：日志和指标共用 `project、instance_id、component`；空实例 ID 使用 `common`，同项目的并行实例应使用不同且跨重启稳定的 ID。
+- **日志交付**：默认异步入队，关键事件可用八级 `*Sync(ctx, message, fields)` 方法。写入成功仅表示交付本机 socket；默认专用入口失败不会自动转写系统 journal，失败条目不重放。
+- **健康与指标**：状态维护、HTTP 和文件出口默认关闭。开启健康维护使用 `StateEnabled`；组件两项健康样本还需 `EnableHealthMetrics: true`。关闭健康导出不影响两个日志 Counter，普通日志不自动改变业务健康结论。
+- **名称目录**：`CatalogEnabled` 默认关闭，开启后按实际接收日志建立和更新目录；目录记录不代表进程存活或 journal 当前留存。
+
+## 文档导航
+
+| 主题 | 内容 |
+| --- | --- |
+| [SDK 接入](docs/sdk.md) | 身份、注册、SafeNew 配置纠正、Close 生命周期 |
+| [日志发送](docs/logging.md) | 日志格式、协议、队列、失败处理、同步日志 |
+| [名称目录](docs/catalog.md) | 清单结构、权限、累计量、保留和清理 |
+| [健康与指标](docs/metrics.md) | 状态、队满降级、共享 Registry、HTTP 与文件出口 |
+| [主机部署](docs/journal.md) | init、专用 journal、容量、权限和迁移 |
+| [命令工具](tools/README.md) | 安装、名称发现、查询参数、性能诊断、CI 发布 |
+
+## 开发验证
+
+CI 固定 Go 1.23.12；本地可使用同一工具链：
+
+```sh
+GOTOOLCHAIN=go1.23.12 go test -race ./...
+GOTOOLCHAIN=go1.23.12 go vet ./...
+```
+
+测试使用隔离目录和 socket；安装脚本测试需要 util-linux 的 `script`，不执行真实系统安装或主机初始化。

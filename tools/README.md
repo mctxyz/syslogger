@@ -34,6 +34,30 @@ mct-syslogger -p example-project -i example-instance -c example-component -s=-2h
 
 ## Release 下载与安装
 
+### 一条命令安装并初始化
+
+在目标 Linux 主机的交互终端执行：
+
+```bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash'
+```
+
+[安装脚本](https://github.com/mctxyz/syslogger/blob/main/tools/install/install.sh) 自动识别 amd64／arm64，解析最新 Release 的固定 tag，下载对应压缩包并校验 `SHA256SUMS`。验证二进制支持 `init` 后，交互收集以下参数：
+
+| 参数 | 默认值与用途 |
+| --- | --- |
+| 安装前缀 | `/usr/local`；命令安装到 `bin/mct-syslogger`，使用说明、许可和部署文档安装到 `share/doc/mct-syslogger/` |
+| 程序运行账户 | 必填，使用已存在的账户；本地身份来源和目录组权限由 `init` 校验 |
+| journal 持久化容量 | `5G`；传给 `init --journal-max-use`，正整数字节或 `K/M/G/T/P/E` 单位 |
+
+脚本显示版本、路径及初始化影响，确认后安装并自动执行 `mct-syslogger init --user=账户 --journal-max-use=容量`。普通用户仅在系统写入及初始化时通过 `sudo` 提权，root 可直接运行；无需对整个下载管道使用 `sudo`。可先下载并审阅脚本，再使用 `bash install.sh`，或用 `bash install.sh --help` 查看说明。
+
+需要 Bash、curl、GNU tar/coreutils、awk、getent、root 或 sudo，以及初始化所需的 Linux、systemd 245+ 和系统工具。交互从 `/dev/tty` 读取，支持管道安装；没有控制终端时明确失败。自定义安装前缀的 `bin/` 若未在 PATH 中，可使用安装后显示的绝对路径运行命令。
+
+首次迁移前停止旧版业务进程；初始化会应用目录权限和专用 journal 配置、重启专用实例，缩小容量可能清理旧归档。下载或校验失败、取消确认均不会执行系统安装或初始化；安装或初始化失败返回非零，已经完成的步骤保留。命令安装后若 `init` 报错，请修正原因后重新执行 `init`；成功后重新登录或重启业务服务刷新组身份。日志读取权限继续由管理员单独管理。
+
+### 手工下载安装
+
 从 [GitHub Releases](https://github.com/mctxyz/syslogger/releases) 下载同一版本的 `SHA256SUMS` 及对应架构压缩包：
 
 | 资产 | 运行平台 |
@@ -295,8 +319,11 @@ mct-syslogger -p example-project -i example-instance -l notice --debug 2>query-d
 
 ```sh
 go test -race ./tools/mct-syslogger ./internal/catalog
+go test ./tools/install
 go vet ./tools/mct-syslogger ./internal/catalog
 GOTOOLCHAIN=go1.23.12 go test -run '^$' -bench '^(BenchmarkQueryRecord|BenchmarkFilterLogs)$' -benchmem ./tools/mct-syslogger
 ```
 
 测试使用内存日志、隔离目录和测试辅助进程，覆盖目录发布与读取、筛选和输出，以及日志解析、数量限制、跟踪参数及收尾，不读取真实系统日志。JSON 差分测试和 fuzz 使用优化前标准库实现作为对照，覆盖重复键合并、空值、非法内容、精度、转义、按需展开及缓存所有权；基准分别测量单条 CPU 路径和含行读取、缓存反转、写入的完整过滤路径。原生预筛测试使用 SDK 编码的正文与元数据，覆盖等级阈值、包含/排除、多项目、tag 归一化碰撞、实例/组件/内容复核及匹配后限量。性能诊断测试覆盖分级计数、字段复用、读取/写入归属、stderr 分流、取消和错误；`BenchmarkFilterDebug` 对照开启与关闭诊断时的处理开销。
+
+安装脚本测试在 Linux 使用 util-linux 的 `script` 创建控制终端，通过下载和提权命令替身及临时安装前缀，验证管道交互、校验、安装、初始化参数和失败收尾；测试不调用真实主机初始化，也不写入系统安装目录。
