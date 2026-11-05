@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,16 @@ import (
 	"github.com/mctxyz/syslogger/internal/diagnostic"
 	"github.com/mctxyz/syslogger/internal/logging"
 )
+
+// preparedCatalogRoot 在隔离目录中准备与管理员初始化一致的共享权限。
+func preparedCatalogRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
 
 // catalogManager 在隔离目录中验证真实发布逻辑，固定系统路径留给平台上的运行验证。
 func catalogManager(t *testing.T, cfg Config, root string) *Manager {
@@ -61,13 +72,13 @@ func TestCatalogRegistrationRestartAndClose(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.StateEnabled = false
 	cfg.InstanceDescription = "旧实例说明"
-	root := filepath.Join(t.TempDir(), "catalog")
+	root := preparedCatalogRoot(t)
 	first := catalogManager(t, cfg, root)
 	if _, err := first.Register(ComponentConfig{Name: "obsolete", Description: "旧组件"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(root); !os.IsNotExist(err) {
-		t.Fatalf("初始化或注册提前创建了名称目录: %v", err)
+	if _, err := os.Stat(filepath.Dir(first.catalog.Path(cfg.Project, cfg.InstanceID))); !os.IsNotExist(err) {
+		t.Fatalf("初始化或注册提前创建了项目目录: %v", err)
 	}
 	first.components["obsolete"].Info("首次使用", nil)
 	waitUntil(t, func() bool {
@@ -115,7 +126,7 @@ func TestCatalogRegistrationRestartAndClose(t *testing.T) {
 
 func TestConcurrentCatalogRegistration(t *testing.T) {
 	cfg := testConfig(t)
-	m := catalogManager(t, cfg, t.TempDir())
+	m := catalogManager(t, cfg, preparedCatalogRoot(t))
 	var workers sync.WaitGroup
 	for i := 0; i < 12; i++ {
 		workers.Add(1)
@@ -161,10 +172,16 @@ func TestCatalogFailurePreservesBusinessRegistration(t *testing.T) {
 	waitUntil(t, func() bool {
 		return strings.Contains(capture.String(), "发布日志名称目录失败")
 	})
-	if currentRecord(t, m, "rpc").State != int(StateHealthy) || currentRecord(t, m, diagnostic.ComponentName).State != int(StateHealthy) {
-		t.Fatal("辅助目录失败改变了原有健康状态")
+	if currentRecord(t, m, "rpc").State != int(StateHealthy) || currentRecord(t, m, diagnostic.ComponentName).State != int(StateDegraded) {
+		t.Fatal("辅助目录失败应只降级管理器自身健康")
 	}
 	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, catalog.DirectoryMode); err != nil {
 		t.Fatal(err)
 	}
 	m.publishCatalog()
@@ -172,12 +189,106 @@ func TestCatalogFailurePreservesBusinessRegistration(t *testing.T) {
 	if err != nil || len(instances) != 1 || instances[0].Components[0].LogCount != 1 {
 		t.Fatalf("写入失败后重试丢失或重复累计: %+v, %v", instances, err)
 	}
+	if currentRecord(t, m, diagnostic.ComponentName).State != int(StateHealthy) {
+		t.Fatal("目录恢复后没有清除对应降级原因")
+	}
+}
+
+func TestMissingCatalogPreservesLogsAndMetrics(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.SyslogSocketPath = filepath.Join(socketDirectory(t), "catalog.sock")
+	receiver := unixReceiver(t, cfg.SyslogSocketPath)
+	root := filepath.Join(t.TempDir(), "not-initialized")
+	m := catalogManager(t, cfg, root)
+	c := testComponent(t, m, "rpc")
+	c.Healthy()
+	c.Info("目录失败仍然发送日志", nil)
+	if data := receive(t, receiver); !strings.Contains(string(data), "目录失败仍然发送日志") {
+		t.Fatalf("日志没有正常交付: %s", data)
+	}
+	waitUntil(t, func() bool {
+		return currentRecord(t, m, diagnostic.ComponentName).State == int(StateDegraded)
+	})
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("SDK 不应补建未初始化的全局目录: %v", err)
+	}
+	if currentRecord(t, m, "rpc").State != int(StateHealthy) {
+		t.Fatal("目录故障影响了业务组件健康")
+	}
+	if data, err := m.metricsBytes(); err != nil || !strings.Contains(string(data), `component="syslogger_manager"`) {
+		t.Fatalf("目录故障阻断了指标采集: %s %v", data, err)
+	}
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("目录故障不应进入关闭错误: %v", err)
+	}
+}
+
+func TestCatalogPermissionFailureAndRecovery(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("权限拒绝场景需要非 root 的 POSIX 账户")
+	}
+	cfg := testConfig(t)
+	cfg.SyslogSocketPath = filepath.Join(socketDirectory(t), "permission.sock")
+	receiver := unixReceiver(t, cfg.SyslogSocketPath)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0700) })
+	m := catalogManager(t, cfg, root)
+	c := testComponent(t, m, "rpc")
+	c.Healthy()
+	c.Info("无目录写权限仍发送", nil)
+	_ = receive(t, receiver)
+	m.publishCatalog()
+	if currentRecord(t, m, diagnostic.ComponentName).State != int(StateDegraded) || currentRecord(t, m, "rpc").State != int(StateHealthy) {
+		t.Fatal("权限不足没有独立降级管理器")
+	}
+	if err := os.Chmod(root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	m.publishCatalog()
+	if currentRecord(t, m, diagnostic.ComponentName).State != int(StateHealthy) {
+		t.Fatal("修复权限后的实际发布没有恢复管理器")
+	}
+	instances, err := m.catalog.Read()
+	if err != nil || len(instances) != 1 || instances[0].Components[0].LogCount != 1 {
+		t.Fatalf("权限恢复后累计增量不正确: %+v %v", instances, err)
+	}
+}
+
+func TestCatalogIdleRecoveryWithoutLogs(t *testing.T) {
+	cfg := testConfig(t)
+	root := filepath.Join(t.TempDir(), "not-initialized")
+	m := catalogManager(t, cfg, root)
+	waitUntil(t, func() bool {
+		return currentRecord(t, m, diagnostic.ComponentName).State == int(StateDegraded)
+	})
+	if err := os.Mkdir(root, 0775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	m.publishCatalog()
+	if currentRecord(t, m, diagnostic.ComponentName).State != int(StateHealthy) {
+		t.Fatal("没有日志活动时根目录恢复未清除降级")
+	}
+	instances, err := m.catalog.Read()
+	if err != nil || len(instances) != 0 {
+		t.Fatalf("空闲复查生成了虚假目录记录: %+v %v", instances, err)
+	}
+	m.catalogResult(diagnostic.CatalogCleanup, errors.New("清理失败"))
+	m.publishCatalog()
+	if currentRecord(t, m, diagnostic.ComponentName).State != int(StateDegraded) {
+		t.Fatal("空闲复查掩盖了独立清理故障")
+	}
 }
 
 func TestCatalogConcurrentComponentCounts(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.DefaultQueueCapacity = 4096
-	m := catalogManager(t, cfg, t.TempDir())
+	m := catalogManager(t, cfg, preparedCatalogRoot(t))
 	components := []*Component{testComponent(t, m, "a"), testComponent(t, m, "b")}
 	var workers sync.WaitGroup
 	for _, component := range components {
@@ -205,7 +316,7 @@ func TestCatalogConcurrentComponentCounts(t *testing.T) {
 }
 
 func TestCatalogPollingPreservesActualActivity(t *testing.T) {
-	m := catalogManager(t, testConfig(t), t.TempDir())
+	m := catalogManager(t, testConfig(t), preparedCatalogRoot(t))
 	c := testComponent(t, m, "rpc")
 	c.Info("一次活动", nil)
 	waitUntil(t, func() bool {
@@ -222,7 +333,7 @@ func TestCatalogPollingPreservesActualActivity(t *testing.T) {
 }
 
 func TestCatalogEncodingAndCloseRejectionsDoNotCount(t *testing.T) {
-	m := catalogManager(t, testConfig(t), t.TempDir())
+	m := catalogManager(t, testConfig(t), preparedCatalogRoot(t))
 	c := testComponent(t, m, "rpc")
 	c.Info("编码失败", Fields{"unsupported": func() {}})
 	m.publishCatalog()
@@ -247,7 +358,7 @@ func TestCatalogStartupDiagnosticActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := newManager(cfg)
-	m.catalog.Root = t.TempDir()
+	m.catalog.Root = preparedCatalogRoot(t)
 	m.registry.MustRegister(m)
 	m.startupLogs = logging.New(8, cfg.SyslogSocketPath, cfg.Project, cfg.InstanceID, diagnostic.ComponentName, m.catalogWake)
 	entry, err := logging.Encode(m.id, diagnostic.ComponentName, logging.Warning, "初始化配置诊断", nil, time.Now())
@@ -281,7 +392,7 @@ func TestCatalogStartupDiagnosticActivity(t *testing.T) {
 
 func TestCatalogCloseDeadlineWhileProjectLocked(t *testing.T) {
 	cfg := testConfig(t)
-	m := catalogManager(t, cfg, t.TempDir())
+	m := catalogManager(t, cfg, preparedCatalogRoot(t))
 	c := testComponent(t, m, "rpc")
 	c.Info("建立目录", nil)
 	waitUntil(t, func() bool {

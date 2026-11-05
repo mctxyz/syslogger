@@ -150,7 +150,7 @@ func TestConcurrentSynchronousLogs(t *testing.T) {
 
 func TestSynchronousCatalogActivity(t *testing.T) {
 	cfg := testConfig(t)
-	m := catalogManager(t, cfg, t.TempDir())
+	m := catalogManager(t, cfg, preparedCatalogRoot(t))
 	c := testComponent(t, m, "rpc")
 	if err := c.InfoSync(context.Background(), "已接收但连接失败", nil); err == nil {
 		t.Fatal("测试缺省 socket 意外可用")

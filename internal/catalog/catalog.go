@@ -4,12 +4,25 @@ package catalog
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 )
 
 // Root 是 SDK 和日志工具共同使用的固定目录，与进程 TMPDIR 无关。
 const Root = "/var/lib/mct-syslogger"
+
+// Group 是初始化工具为目录写入者准备的共享组。
+const Group = "mct-syslogger"
+
+// DirectoryMode 通过 setgid 逐层继承共享组，其余账户可读取和遍历目录。
+const DirectoryMode = os.ModeSetgid | 0775
+
+// FileMode 允许所有者及共享组维护清单和稳定锁，其余账户只读。
+const FileMode = 0664
+
+// LockName 是项目级稳定锁文件名，发布和权限迁移共用此路径约定。
+const LockName = ".catalog.lock"
 
 // SyncInterval 是 SDK 批量同步周期，也是物理清理为未同步活动保留的宽限窗口。
 const SyncInterval = 10 * time.Minute

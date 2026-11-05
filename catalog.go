@@ -17,6 +17,7 @@ func (m *Manager) startCatalog() {
 func (m *Manager) runCatalog() {
 	defer close(m.catalogDone)
 	defer m.publishCatalog()
+	m.publishCatalog()
 	ticker := time.NewTicker(catalog.SyncInterval)
 	defer ticker.Stop()
 	for {
@@ -25,7 +26,9 @@ func (m *Manager) runCatalog() {
 			m.publishCatalog()
 		case <-ticker.C:
 			m.publishCatalog()
-			if err := m.catalog.Prune(time.Now().UTC()); err != nil {
+			err := m.catalog.Prune(time.Now().UTC())
+			m.catalogResult(diagnostic.CatalogCleanup, err)
+			if err != nil {
 				m.catalogReporter.Printf("project=%q instance_id=%q: 清理过期日志名称目录失败: %v", m.id.Project, m.id.InstanceID, err)
 			}
 		case <-m.catalogStop:
@@ -34,7 +37,7 @@ func (m *Manager) runCatalog() {
 	}
 }
 
-// publishCatalog 取走组件接收窗口后在集合锁外合并写入，失败时恢复窗口供下周期同步。
+// publishCatalog 在集合锁外发布活动，失败后恢复窗口；空闲周期复查根目录以恢复可用性。
 func (m *Manager) publishCatalog() {
 	if m.catalog == nil {
 		return
@@ -74,13 +77,24 @@ func (m *Manager) publishCatalog() {
 		collect(component.logs, component.name, component.description)
 	}
 	m.mu.RUnlock()
-	if len(windows) == 0 {
-		return
+	err := m.catalog.CheckRoot()
+	if err == nil && len(windows) > 0 {
+		err = m.catalog.Merge(instance, time.Now().UTC())
 	}
-	if err := m.catalog.Merge(instance, time.Now().UTC()); err != nil {
+	m.catalogResult(diagnostic.CatalogPublication, err)
+	if err != nil {
 		for _, window := range windows {
 			window.queue.RestoreActivity(window.activity)
 		}
 		m.catalogReporter.Printf("project=%q instance_id=%q: 发布日志名称目录失败: %v", m.id.Project, m.id.InstanceID, err)
+	}
+}
+
+// catalogResult 在集合锁内合成管理器健康，不改变业务组件和关闭结果。
+func (m *Manager) catalogResult(operation diagnostic.CatalogOperation, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.diagnostic != nil {
+		m.diagnostic.CatalogResult(operation, err != nil, time.Now())
 	}
 }

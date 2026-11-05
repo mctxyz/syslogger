@@ -9,6 +9,16 @@ import (
 	"github.com/mctxyz/syslogger/internal/record"
 )
 
+// CatalogOperation 区分发布和清理，避免其中一次成功掩盖另一项故障。
+type CatalogOperation uint8
+
+const (
+	// CatalogPublication 对应实例增量发布。
+	CatalogPublication CatalogOperation = iota
+	// CatalogCleanup 对应过期目录清理。
+	CatalogCleanup
+)
+
 const (
 	// ComponentName 是管理器的保留组件名称。
 	ComponentName = "syslogger_manager"
@@ -25,6 +35,7 @@ type Tracker struct {
 	Current             record.Record
 	kind                string
 	configurationFailed bool
+	catalogFailed       [2]bool
 }
 
 // New 在成功创建时建立初始化健康事实。
@@ -47,8 +58,8 @@ func (t *Tracker) RegistrationFailed(kind string, at time.Time) {
 		return
 	}
 	if !at.Before(t.Current.ObservedAt) {
-		t.Current = record.New(2, at)
 		t.kind = kind
+		t.refresh(at)
 	}
 }
 
@@ -58,9 +69,28 @@ func (t *Tracker) Registered(at time.Time) {
 		return
 	}
 	if t.kind != "" && !at.Before(t.Current.ObservedAt) {
-		t.Current = record.New(1, at)
 		t.kind = ""
+		t.refresh(at)
 	}
+}
+
+// CatalogResult 只恢复对应的辅助目录故障，配置及注册故障仍按原条件恢复。
+func (t *Tracker) CatalogResult(operation CatalogOperation, failed bool, at time.Time) {
+	if at.Before(t.Current.ObservedAt) || t.catalogFailed[operation] == failed {
+		return
+	}
+	t.catalogFailed[operation] = failed
+	if !t.configurationFailed {
+		t.refresh(at)
+	}
+}
+
+func (t *Tracker) refresh(at time.Time) {
+	state := 1
+	if t.kind != "" || t.catalogFailed[CatalogPublication] || t.catalogFailed[CatalogCleanup] {
+		state = 2
+	}
+	t.Current = record.New(state, at)
 }
 
 // Reporter 对同一资源的连续运行错误限流，输出独立于业务日志队列。

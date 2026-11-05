@@ -10,31 +10,46 @@ SDK 默认通过 `/run/systemd/journal.mct-syslogger/socket`，将结构化日�
 
 ## 主机准备
 
-需要支持 journal namespaces 的 Linux 主机及 systemd 245+。以下操作由部署管理员执行；SDK 和 CLI 本身只使用已准备的入口，不修改主机配置。
+需要支持 journal namespaces 的 Linux 主机及 systemd 245+。管理员使用独立的初始化子命令准备主机，SDK 和日常查询只使用已经准备的入口：
 
-创建 `/etc/systemd/journald@mct-syslogger.conf`：
+```sh
+sudo mct-syslogger init --user appuser
+# 可选：将持久化日志总容量改为 10 GiB。
+sudo mct-syslogger init --user appuser --journal-max-use 10G
+mct-syslogger init --help
+```
+
+`appuser` 必须是已有本机账户，root-only 部署可以指定 `--user root`。命令需要 root 及系统工具 GNU `getent`、`groupadd`、`usermod`、`systemctl`、`systemd-analyze`。账户和写入组由本机 files 管理，名称及 UID/GID 与当前 NSS 解析保持一致；默认 `files systemd` 可用。工具核验可枚举的主组、同 GID 别名组及附加成员，并确认目标账户的有效组身份；不可枚举外部身份源、自定义 userdb 或管理员额外服务组授权由部署方单独核验，初始化不管理这些授权域。
+
+命令同时准备 `/var/lib/mct-syslogger` 的共享组写权限：root 与指定账户可写，其他本机账户只读。先停止旧版写入进程再迁移权限，完成后重新登录或重启业务服务刷新组身份；额外组成员、ACL 和异常受管对象会报错，交管理员先处理。
+
+systemd 248+ 时，命令管理 `/etc/systemd/journald@mct-syslogger.conf.d/60-mct-syslogger-init.conf`；245–247 的命名空间尚不加载 drop-in，改为管理带工具标识的 `/etc/systemd/journald@mct-syslogger.conf`。已有非受管主文件会明确报错并保留，需管理员先调整。默认内容如下：
 
 ```ini
 [Journal]
 Storage=persistent
-SystemMaxUse=512M
-RuntimeMaxUse=64M
+SystemMaxUse=5G
+Compress=yes
 ForwardToSyslog=no
 ForwardToKMsg=no
 ForwardToConsole=no
 ForwardToWall=no
 ```
 
-上述容量是部署示例，按业务日志量及主机空间调整。journald 按文件轮转和清理历史，容量设置不是逐字节的硬配额。四个转发选项用于将专用日志流保留在该实例内；若另有 `ForwardToSocket` 配置或外部采集器主动读取这个命名空间，也应核对其下游目标，避免重新汇入默认系统日志。
+`--journal-max-use` 接受正整数字节及 `K/M/G/T/P/E` 单位，按 1024 进制计量；`5G` 对应该命名空间全部项目共用的 5 GiB 持久化容量。`RuntimeMaxUse` 保持系统现有配置。原生透明压缩以数据对象为单位，索引继续可用，查询自动解压；会增加解压 CPU 开销，也可能减少磁盘读取，具体性能取决于实际负载。容量按 journal 文件实际占用计算，包含索引与元数据；journald 按文件轮转和清理历史，容量设置不是逐字节的硬配额。四个转发选项用于将专用日志流保留在该实例内；若另有 `ForwardToSocket` 配置或外部采集器主动读取这个命名空间，也应核对其下游目标，避免重新汇入默认系统日志。
 
-将专用 socket 加入开机启动依赖并立即启动：
+初始化只替换自身标识的受管文件，保留管理员独立配置。命令按已安装 systemd 版本选择主文件与 drop-in 的实际加载规则，逐文件解析；正文路径注释不作为文件边界，BOM 可读取，语法损坏明确失败。高优先级片段覆盖受管设置时，报告冲突键和真实来源，由管理员先调整。版本切换时，先写入并核验新受管配置，再清理工具自己生成的旧非活动文件，保留管理员文件。
+
+初始化分步骤执行，失败时已完成步骤保留，修正原因后可重试；每次省略容量参数都使用 `5G`，缩小容量可能使 journald 随后清理旧归档。
+
+初始化将专用 socket 加入开机启动依赖并立即启动，执行的对应系统操作为：
 
 ```sh
 sudo systemctl add-wants sockets.target systemd-journald@mct-syslogger.socket
 sudo systemctl start systemd-journald@mct-syslogger.socket
 ```
 
-`add-wants` 为实例 socket 建立持久的目标依赖，适用于模板没有 `[Install]` 段的发行版；socket 收到首条日志时按需激活对应 journald 实例。已有实例运行时，修改配置后重启该专用实例：
+`add-wants` 为实例 socket 建立持久的目标依赖，适用于模板没有 `[Install]` 段的发行版。每次初始化随后重启专用实例，使上次在配置写入后、应用前中断的情况也可通过重复执行恢复：
 
 ```sh
 sudo systemctl restart systemd-journald@mct-syslogger.service

@@ -18,6 +18,16 @@ import (
 	"github.com/rivo/uniseg"
 )
 
+// preparedCatalogRoot 为 SDK 发布夹具准备管理员负责的共享根目录。
+func preparedCatalogRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestCatalogOptions(t *testing.T) {
 	opts := testOptions(t, "--list", "-p", "a", "-p", "b", "-i", "local", "-c", "rpc", "--json", "--colour")
 	if !opts.list || !opts.asJSON || !opts.colour || len(opts.projects) != 2 {
@@ -49,7 +59,7 @@ func TestCatalogOptions(t *testing.T) {
 
 func TestCatalogTreeAndFiltering(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	store := catalog.Store{Root: t.TempDir()}
+	store := catalog.Store{Root: preparedCatalogRoot(t)}
 	at := time.Now().UTC()
 	for _, instance := range []catalog.Instance{
 		{Project: "b", InstanceID: "local", InstanceDescription: "B 实例", Components: []catalog.Component{{Name: "worker"}}},
@@ -126,7 +136,7 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 	now := time.Now().UTC()
 	at := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 1, 2, 345678901, time.UTC)
-	store := catalog.Store{Root: t.TempDir()}
+	store := catalog.Store{Root: preparedCatalogRoot(t)}
 	components := []catalog.Component{
 		{Name: "zero", CreatedAt: at, LastActiveAt: at, LogCount: 0},
 		{Name: "maximum", Description: "RPC\t获取", CreatedAt: at, LastActiveAt: at, LogCount: ^uint64(0)},
@@ -203,7 +213,7 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 }
 
 func TestCatalogVisibleColumnAlignment(t *testing.T) {
-	store := catalog.Store{Root: t.TempDir()}
+	store := catalog.Store{Root: preparedCatalogRoot(t)}
 	at := time.Now().UTC()
 	instances := []catalog.Instance{
 		{Project: "p", InstanceID: "first", InstanceDescription: "实例说明", Components: []catalog.Component{
@@ -275,7 +285,7 @@ func TestCatalogVisibleColumnAlignment(t *testing.T) {
 }
 
 func TestCatalogDescriptionWriteError(t *testing.T) {
-	store := catalog.Store{Root: t.TempDir()}
+	store := catalog.Store{Root: preparedCatalogRoot(t)}
 	at := time.Now().UTC()
 	instance := catalog.Instance{Project: "p", InstanceID: "i", Components: []catalog.Component{
 		{Name: "rpc", Description: "description", CreatedAt: at, LastActiveAt: at},
@@ -308,6 +318,12 @@ func TestCatalogEscapingColourAndErrors(t *testing.T) {
 	instance.Components[0].CreatedAt = at
 	instance.Components[0].LastActiveAt = at
 	instance.Components[0].LogCount = 1
+	if err := os.Mkdir(store.Root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(store.Root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Merge(instance, at); err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +354,7 @@ func TestCatalogEscapingColourAndErrors(t *testing.T) {
 }
 
 func TestCatalogExpiryIsReadOnlyAndPreservesUint64(t *testing.T) {
-	store := catalog.Store{Root: t.TempDir()}
+	store := catalog.Store{Root: preparedCatalogRoot(t)}
 	now := time.Now().UTC()
 	old := now.AddDate(-1, 0, 0).Add(-time.Minute)
 	for _, id := range []string{"mixed", "expired"} {

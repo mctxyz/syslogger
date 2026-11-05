@@ -228,7 +228,7 @@ func TestLogAndCatalogWithHealthMetricsDisabled(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.SyslogSocketPath = path
 	cfg.Registry = prometheus.NewPedanticRegistry()
-	m := catalogManager(t, cfg, t.TempDir())
+	m := catalogManager(t, cfg, preparedCatalogRoot(t))
 	c, err := m.Register(ComponentConfig{Name: "plain"})
 	if err != nil {
 		t.Fatal(err)

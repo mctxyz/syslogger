@@ -1,8 +1,11 @@
 package catalog
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/gofrs/flock"
 )
@@ -13,14 +16,24 @@ func lockProject(directory string) (*flock.Flock, error) {
 	if err := sharedDirectory(directory); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(directory, ".catalog.lock")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0666)
+	path := filepath.Join(directory, LockName)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, FileMode)
+	created := err == nil
+	if errors.Is(err, os.ErrExist) {
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return nil, statErr
+		}
+		if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0002 != 0) {
+			return nil, fmt.Errorf("项目锁 %s 需要通过 mct-syslogger init 修复权限", path)
+		}
+		file, err = os.OpenFile(path, os.O_RDWR, 0)
+	}
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
-	if err == nil && info.Mode().Perm() != 0666 {
-		err = file.Chmod(0666)
+	if created {
+		err = file.Chmod(FileMode)
 	}
 	closeErr := file.Close()
 	if err != nil {

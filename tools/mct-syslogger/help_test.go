@@ -69,9 +69,6 @@ func TestHelpLayout(t *testing.T) {
 	}
 	for _, section := range []string{
 		"查询方式：",
-		"身份筛选（日志 / 目录通用）：",
-		"内容搜索（仅日志查询）：",
-		"性能诊断（仅日志查询）：",
 		"参数与组合规则：",
 		"时间与条数：",
 		"输出与退出码：",
@@ -80,6 +77,11 @@ func TestHelpLayout(t *testing.T) {
 	} {
 		if !strings.Contains(help.String(), section) {
 			t.Fatalf("帮助缺少分组：%s", section)
+		}
+	}
+	for _, group := range optionGroups {
+		if !strings.Contains(help.String(), group.title+"：") {
+			t.Fatalf("帮助缺少注册的参数分组：%s", group.title)
 		}
 	}
 	for _, usage := range []string{

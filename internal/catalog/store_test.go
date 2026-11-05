@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,44 @@ func TestFixedRoot(t *testing.T) {
 	}
 }
 
+// preparedRoot 在隔离目录中模拟管理员已经完成的根目录初始化。
+func preparedRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestUninitializedPermissionsAreNotRepairedBySDK(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX 目录共享权限")
+	}
+	for name, mode := range map[string]os.FileMode{
+		"other-write":    0777,
+		"missing-setgid": 0775,
+		"sticky":         DirectoryMode | os.ModeSticky,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Chmod(root, mode); err != nil {
+				t.Fatal(err)
+			}
+			store := Store{Root: root}
+			at := time.Now().UTC()
+			instance := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, at)
+			if err := store.Merge(instance, at); !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("SDK 不应使用未初始化的权限: %v", err)
+			}
+			info, err := os.Stat(root)
+			if err != nil || info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != mode {
+				t.Fatalf("SDK 擅自调整了既有目录权限: %v %v", info, err)
+			}
+		})
+	}
+}
+
 // activeFixture 建立带有真实活动字段的目录输入，数量表示本次合并的增量。
 func activeFixture(instance Instance, at time.Time) Instance {
 	instance.CreatedAt = at
@@ -33,6 +72,12 @@ func activeFixture(instance Instance, at time.Time) Instance {
 
 func TestMergeReadAndAccumulation(t *testing.T) {
 	store := Store{Root: filepath.Join(t.TempDir(), "catalog")}
+	if err := os.Mkdir(store.Root, DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(store.Root, DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
 	at := time.Now().UTC()
 	instance := activeFixture(Instance{
 		Project:             strings.Repeat("项目/", 1000),
@@ -66,12 +111,13 @@ func TestMergeReadAndAccumulation(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" {
 		for path, mode := range map[string]os.FileMode{
-			store.Root:         0777,
-			filepath.Dir(path): 0777,
-			path:               0666,
+			store.Root:         DirectoryMode,
+			filepath.Dir(path): DirectoryMode,
+			path:               FileMode,
+			filepath.Join(filepath.Dir(path), ".catalog.lock"): FileMode,
 		} {
 			info, err := os.Stat(path)
-			if err != nil || info.Mode().Perm() != mode {
+			if err != nil || info.Mode()&(os.ModeSetgid|os.ModePerm) != mode {
 				t.Fatalf("公共目录权限不符: path=%s info=%v err=%v", path, info, err)
 			}
 		}
@@ -83,7 +129,7 @@ func TestMergeReadAndAccumulation(t *testing.T) {
 }
 
 func TestConcurrentPublicationAndRead(t *testing.T) {
-	store := Store{Root: filepath.Join(t.TempDir(), "shared")}
+	store := Store{Root: preparedRoot(t)}
 	at := time.Now().UTC()
 	var writers sync.WaitGroup
 	for _, id := range []string{"instance-a", "instance-b", "instance-c", "instance-a"} {
@@ -140,8 +186,8 @@ func TestMissingAndInvalidCatalog(t *testing.T) {
 	if err != nil || instances == nil || len(instances) != 0 {
 		t.Fatalf("缺省目录应为空列表: got=%v err=%v", instances, err)
 	}
-	if err := store.Prune(at); err != nil {
-		t.Fatal(err)
+	if err := store.Prune(at); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("缺少根目录时清理应明确失败: %v", err)
 	}
 	if err := store.Merge(Instance{Project: "project", InstanceID: "instance"}, at); err != nil {
 		t.Fatal(err)
@@ -150,6 +196,15 @@ func TestMissingAndInvalidCatalog(t *testing.T) {
 		t.Fatalf("空活动或缺省目录清理产生了文件: %v", err)
 	}
 	fixture := activeFixture(Instance{Project: "project", InstanceID: "instance", Components: []Component{{Name: "rpc"}}}, at)
+	if err := store.Merge(fixture, at); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("发布不应自动补建全局根目录: %v", err)
+	}
+	if err := os.Mkdir(store.Root, DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(store.Root, DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Merge(fixture, at); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +244,7 @@ func TestMissingAndInvalidCatalog(t *testing.T) {
 }
 
 func TestReadSortingAndTemporaryFiles(t *testing.T) {
-	store := Store{Root: t.TempDir()}
+	store := Store{Root: preparedRoot(t)}
 	at := time.Now().UTC()
 	for _, project := range []string{"b", "a"} {
 		for _, id := range []string{"z", "a"} {
@@ -225,7 +280,7 @@ func TestReadSortingAndTemporaryFiles(t *testing.T) {
 }
 
 func TestPruneIndividualComponentsAndRevival(t *testing.T) {
-	store := Store{Root: t.TempDir()}
+	store := Store{Root: preparedRoot(t)}
 	now := time.Now().UTC()
 	old := now.AddDate(-1, 0, -1)
 	for _, id := range []string{"mixed", "expired"} {
@@ -254,7 +309,7 @@ func TestPruneIndividualComponentsAndRevival(t *testing.T) {
 }
 
 func TestMergeOverflowAndExpiryWithoutPrune(t *testing.T) {
-	store := Store{Root: t.TempDir()}
+	store := Store{Root: preparedRoot(t)}
 	now := time.Now().UTC()
 	instance := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, now)
 	instance.Components[0].LogCount = ^uint64(0)
@@ -292,7 +347,7 @@ func TestMergeAcrossProcesses(t *testing.T) {
 		}
 		return
 	}
-	root := t.TempDir()
+	root := preparedRoot(t)
 	var workers sync.WaitGroup
 	for index := 0; index < 4; index++ {
 		workers.Add(1)
@@ -325,7 +380,7 @@ func TestMergeActivityAcrossExpiry(t *testing.T) {
 	}
 	for _, scenario := range []string{"direct", "prune-other-process", "merge-other-component", "late-without-cleanup"} {
 		t.Run(scenario, func(t *testing.T) {
-			store := Store{Root: t.TempDir()}
+			store := Store{Root: preparedRoot(t)}
 			initial := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, createdAt)
 			initial.Components[0].LogCount = 100
 			if err := store.Merge(initial, createdAt); err != nil {
@@ -371,7 +426,7 @@ func TestPhysicalExpiryGracePreservesRecordUntilRemoval(t *testing.T) {
 	createdAt := time.Date(2024, 4, 10, 12, 0, 0, 0, time.UTC)
 	expiresAt := createdAt.AddDate(1, 0, 0)
 	for _, resume := range []bool{false, true} {
-		store := Store{Root: t.TempDir()}
+		store := Store{Root: preparedRoot(t)}
 		initial := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, createdAt)
 		initial.Components[0].LogCount = 100
 		if err := store.Merge(initial, createdAt); err != nil {
@@ -419,7 +474,7 @@ func TestMergeSameComponentOutOfOrderAcrossExpiry(t *testing.T) {
 		{name: "late-first", times: []time.Time{late, early}},
 	} {
 		t.Run(order.name, func(t *testing.T) {
-			store := Store{Root: t.TempDir()}
+			store := Store{Root: preparedRoot(t)}
 			initial := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, createdAt)
 			initial.Components[0].LogCount = 100
 			if err := store.Merge(initial, createdAt); err != nil {

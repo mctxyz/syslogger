@@ -51,3 +51,42 @@ func TestConfigurationFailurePersists(t *testing.T) {
 		t.Fatal("注册事件覆盖了配置初始化异常")
 	}
 }
+
+func TestCatalogReasonsRecoverIndependently(t *testing.T) {
+	for _, first := range []CatalogOperation{CatalogPublication, CatalogCleanup} {
+		at := time.Now()
+		tracker := New(at)
+		tracker.CatalogResult(CatalogPublication, true, at.Add(time.Second))
+		tracker.CatalogResult(CatalogCleanup, true, at.Add(2*time.Second))
+		tracker.RegistrationFailed(RegisterDuplicate, at.Add(3*time.Second))
+		tracker.Registered(at.Add(4 * time.Second))
+		if tracker.Current.State != 2 {
+			t.Fatal("成功注册掩盖了目录故障")
+		}
+		tracker.CatalogResult(first, false, at.Add(5*time.Second))
+		if tracker.Current.State != 2 {
+			t.Fatal("一次成功掩盖了另一目录操作的故障")
+		}
+		other := CatalogCleanup
+		if first == CatalogCleanup {
+			other = CatalogPublication
+		}
+		tracker.CatalogResult(other, false, at.Add(6*time.Second))
+		if tracker.Current.State != 1 {
+			t.Fatal("目录全部恢复后仍处于降级")
+		}
+		tracker.CatalogResult(CatalogPublication, true, at.Add(7*time.Second))
+		tracker.RegistrationFailed(RegisterDuplicate, at.Add(8*time.Second))
+		tracker.CatalogResult(CatalogPublication, false, at.Add(9*time.Second))
+		if tracker.Current.State != 2 {
+			t.Fatal("目录恢复掩盖了注册故障")
+		}
+		tracker.ConfigurationFailed(at.Add(10 * time.Second))
+		failed := tracker.Current
+		tracker.CatalogResult(CatalogCleanup, true, at.Add(11*time.Second))
+		tracker.CatalogResult(CatalogCleanup, false, at.Add(12*time.Second))
+		if tracker.Current != failed {
+			t.Fatal("目录事件覆盖了持续配置故障")
+		}
+	}
+}

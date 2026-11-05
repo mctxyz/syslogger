@@ -58,7 +58,7 @@ mkdir -p "$HOME/.local/bin"
 install -m 755 /path/to/syslogger/tools/bin/mct-syslogger "$HOME/.local/bin/mct-syslogger"
 ```
 
-需要提升 journal 读取权限时，在命令前使用 `sudo`，例如 `sudo /path/to/syslogger/tools/bin/mct-syslogger -i local-a`。工具只执行查询，不更改日志权限和留存配置。`tools/bin/` 是已忽略的本地构建目录。
+需要提升 journal 读取权限时，在命令前使用 `sudo`，例如 `sudo /path/to/syslogger/tools/bin/mct-syslogger -i local-a`。查询模式只读取日志和目录；主机配置通过独立的 `init` 子命令完成。`tools/bin/` 是已忽略的本地构建目录。
 
 要让普通用户直接读取系统 journal，管理员可将其加入 `systemd-journal` 组（将 `username` 替换为实际用户名）：
 
@@ -69,6 +69,20 @@ sudo usermod -aG systemd-journal username
 退出并重新登录后组权限生效。命令的 `--help` 同时提供这一配置示例。
 
 日志查询统一向 `journalctl` 传入 `--namespace=mct-syslogger`，身份、等级、时间及跟踪参数继续按下文组合。专用存储、容量和轮转独立于默认 journal；原生 `log` 兜底继续由宿主程序的 stderr／标准日志配置接管。SDK 与 CLI 需配套升级，旧默认 journal 历史仍可使用普通 `journalctl` 查看。
+
+## 初始化主机
+
+```sh
+sudo mct-syslogger init --user appuser
+sudo mct-syslogger init --user appuser --journal-max-use 10G
+mct-syslogger init --help
+```
+
+`--user` 是已有本机程序运行账户，必须明确提供，root-only 部署可指定 root；初始化需要 root、Linux、systemd 245+，以及 GNU `getent`、`groupadd`、`usermod`、`systemctl`、`systemd-analyze`。独立子命令负责创建本机 `mct-syslogger` 组、追加该账户、准备名称目录和专用 journal。目录及项目子目录为 `2775`，JSON 和稳定锁为 `0664`，其他本机账户只读。检查按数值 GID 覆盖可枚举的主组、别名组及附加成员，默认 `files systemd` 可用；外部不可枚举身份源、自定义 userdb 及额外服务组授权由管理员核验。扩展／默认 ACL、越界链接或非受管对象会明确报错；已完成步骤不自动回滚，可修正后重复执行。
+
+`--journal-max-use` 控制本机专用命名空间全部项目的持久化 journal 总占用，默认 `5G`（5 GiB），接受正整数字节及 `K/M/G/T/P/E` 单位。配置开启 journald 原生透明压缩，查询自动解压，容量统计包含索引、元数据与压缩后的数据；`/run` 临时日志容量沿用系统现有配置。每次执行按本次参数应用配置并重启专用 journald 实例；省略容量参数仍采用 `5G`，缩小容量可能触发 journald 清理旧归档，容量并非严格硬配额。
+
+首次迁移前停止旧版写入进程。初始化保留数据及锁 inode、管理员独立配置和默认系统 journal；管理员高优先级配置覆盖受管设置时报告真实来源并失败。245–247 使用受管命名空间主文件，248+ 使用受管 drop-in，版本切换清理安全可确认的旧工具配置。完成后重新登录或重启业务服务刷新组身份，日志读取权限仍单独管理。配置路径与应用步骤见[部署说明](../docs/journal.md)。
 
 ## 查看项目、实例与组件目录
 
@@ -113,7 +127,7 @@ mct-syslogger
 
 组件首次成功接收日志时由 SDK 后台建立记录，之后每 10 分钟批量合并活动和数量，正常关闭时最终同步。`log_count` 按组件独立累计异步入队及同步开始发送的日志，后续发送结果不影响数量，`uint64` 溢出自然回零；异常退出可能丢失最近一次成功同步后的增量。项目锁保护同身份多进程的增量合并，项目和实例文件名使用 SHA-256 摘要，JSON 保留身份原文。
 
-组件按最后一次成功接收时间独立保留一年，后台轮询不续期。`--list` 只读过滤过期组件，过滤后没有组件的实例也不显示；SDK 每 10 分钟执行物理清理，并额外保留一个同步周期，让过期前已接收的活动继续合并历史计数，CLI 显示期限仍为一年。全部应用退出后暂停物理清理，后续运行再处理。名称目录可用于查询未过期的历史身份，实际日志仍按 journal 留存范围查询。根目录和项目目录为 `0777`，JSON 及项目锁文件为 `0666`，适用于受信本机环境；目录历史数据和旧目录由部署方自行处理。
+组件按最后一次成功接收时间独立保留一年，后台轮询不续期。`--list` 只读过滤过期组件，过滤后没有组件的实例也不显示；SDK 每 10 分钟执行物理清理，并额外保留一个同步周期，让过期前已接收的活动继续合并历史计数，CLI 显示期限仍为一年。全部应用退出后暂停物理清理，后续运行再处理。名称目录可用于查询未过期的历史身份，实际日志仍按 journal 留存范围查询。名称目录按初始化后的共享组权限维护；缺失或不可写时，SDK 保留失败增量并重试，仅内置管理器健康降级，日志、业务组件及指标出口继续独立工作。目录历史数据和旧目录由部署方自行处理。
 
 ## 查询示例
 

@@ -120,6 +120,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 	// Go flag 在未注册同名参数时自动处理 -h 和 --help。
 	fmt.Fprintln(writer, "  -h, --help\t显示完整帮助并退出")
 	writer.Flush()
+	fmt.Fprintln(output, "主机初始化使用独立子命令，说明见 mct-syslogger init --help。")
 
 	fmt.Fprintln(output, "\n可用等级（严重程度从高到低，使用小写名称）：")
 	fmt.Fprintln(output, "  "+strings.Join(levels, ", "))
@@ -127,7 +128,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 参数与组合规则：
   • 带大写占位符的参数需要一个值，如 -i local-a、--since=-2h。
     含空格、正则或特殊字符的值请加引号；布尔参数支持 =true / =false，如 --colour=false。
-    所有输入均通过参数传入，位置参数会报错。
+    查询条件通过参数传入，查询模式的位置参数会报错；init 使用独立参数和帮助。
   • project / instance_id / component 精确匹配、区分大小写，使用目录中的名称原文。
     同类身份重复取 OR，不同筛选条件取 AND；未指定某项身份时，该项不限。
   • 日志来源为本模块的原生 journal 输出，severity 对应 PRIORITY。
@@ -219,6 +220,6 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
      管理员也可将普通用户加入 systemd-journal 组：
        sudo usermod -aG systemd-journal username
      将 username 替换为实际用户名，退出并重新登录后生效。
-     本工具只查询日志与目录，权限配置由管理员单独执行。
+     查询模式只读取日志与目录，主机初始化使用独立的 init 子命令。
 `)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -28,7 +29,7 @@ func (s Store) write(instance Instance) error {
 	if _, err := file.Write(data); err != nil {
 		return err
 	}
-	if err := file.Chmod(0666); err != nil {
+	if err := file.Chmod(FileMode); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {
@@ -37,19 +38,36 @@ func (s Store) write(instance Instance) error {
 	return os.Rename(temporary, path)
 }
 
-// sharedDirectory 在并发创建时复用既有目录，显式权限保证不受创建者 umask 限制。
-func sharedDirectory(path string) error {
-	if err := os.MkdirAll(path, 0777); err != nil {
-		return err
-	}
-	info, err := os.Stat(path)
+// CheckRoot 复用管理员准备的根目录；缺失或不安全时交由初始化命令处理。
+func (s Store) CheckRoot() error {
+	return checkDirectory(s.Root)
+}
+
+func checkDirectory(path string) error {
+	info, err := os.Lstat(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("名称目录 %s 不可用，请运行 mct-syslogger init: %w", path, err)
 	}
-	if info.Mode().Perm() != 0777 {
-		return os.Chmod(path, 0777)
+	if !info.IsDir() {
+		return fmt.Errorf("名称目录 %s 不是普通目录", path)
+	}
+	// setgid 是跨运行账户继续维护的前提，权限漂移交给管理员初始化修复。
+	if runtime.GOOS != "windows" && info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != DirectoryMode {
+		return fmt.Errorf("名称目录 %s 需要 2775 权限及共享组继承，请运行 mct-syslogger init: %w", path, os.ErrPermission)
 	}
 	return nil
+}
+
+// sharedDirectory 只为当前进程新建的项目目录设置权限，复用既有目录时保留所有权。
+func sharedDirectory(path string) error {
+	err := os.Mkdir(path, DirectoryMode)
+	if err == nil {
+		return os.Chmod(path, DirectoryMode)
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return checkDirectory(path)
 }
 
 // Read 读取并排序项目和实例；首次发布之前的缺省目录对应空列表。

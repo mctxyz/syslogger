@@ -16,7 +16,7 @@ func (s Store) Merge(delta Instance, now time.Time) error {
 	if len(delta.Components) == 0 {
 		return nil
 	}
-	if err := sharedDirectory(s.Root); err != nil {
+	if err := s.CheckRoot(); err != nil {
 		return err
 	}
 	path := s.Path(delta.Project, delta.InstanceID)
@@ -84,10 +84,10 @@ func (s Store) Merge(delta Instance, now time.Time) error {
 
 // Prune 与增量合并使用同一项目锁，为一年未活跃记录保留一个同步窗口后再物理移除。
 func (s Store) Prune(now time.Time) error {
-	projects, err := os.ReadDir(s.Root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	if err := s.CheckRoot(); err != nil {
+		return err
 	}
+	projects, err := os.ReadDir(s.Root)
 	if err != nil {
 		return err
 	}
