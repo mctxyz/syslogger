@@ -162,7 +162,7 @@ go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
 
 CLI 固定通过 `journalctl --namespace=mct-syslogger` 查询专用命名空间，将项目、实例、组件条件直接交给 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 原生字段索引，随后继续复核 JSON 正文。应用与 CLI 需配套升级，旧默认 journal 中的历史记录继续用普通 `journalctl` 查询，迁移说明见[专用 journal 配置](docs/journal.md#升级与排障)。身份筛选依赖对应原生字段，传统 syslog 出口的记录不具备这些索引；外部采集转发时也应保留三个身份字段。
 
-编译使用 Go 1.23+，日志查询运行环境为 Linux、systemd 245+ 和 journalctl。用法与快捷命令设置见 [工具说明](tools/README.md)。
+编译使用 Go 1.23+，日志查询运行环境为 Linux、systemd 245+ 和 journalctl。Linux amd64、arm64 预编译包由 tag 发布流程上传到 [GitHub Releases](https://github.com/mctxyz/syslogger/releases)；下载校验、安装、用法与快捷命令设置见 [工具说明](tools/README.md)。
 
 ### 本机日志名称目录
 

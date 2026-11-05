@@ -2,6 +2,39 @@
 
 `mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询固定读取 `mct-syslogger` journal 命名空间，以模块的原生 journal JSON 正文为输入契约，通过 `journalctl` 的项目、实例、组件和等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要 Linux、systemd 245+、journalctl 及相应读取权限，专用命名空间的准备见[部署说明](../docs/journal.md)。
 
+## Release 下载与安装
+
+从 [GitHub Releases](https://github.com/mctxyz/syslogger/releases) 下载同一版本的 `SHA256SUMS` 及对应架构压缩包：
+
+| 资产 | 运行平台 |
+| --- | --- |
+| `mct-syslogger_linux_amd64.tar.gz` | Linux x86-64 |
+| `mct-syslogger_linux_arm64.tar.gz` | Linux ARM64 |
+| `SHA256SUMS` | 两个压缩包的 SHA-256 校验值 |
+
+以下以 amd64 为例，在下载目录校验并安装；`--ignore-missing` 允许只下载当前架构的压缩包。命令在独立子 shell 中执行，校验或安装失败时停止后续步骤：
+
+```sh
+(
+    set -eu
+    sha256sum --ignore-missing -c SHA256SUMS
+    tar -xzf mct-syslogger_linux_amd64.tar.gz
+    mkdir -p "$HOME/.local/bin"
+    install -m 755 mct-syslogger_linux_amd64/mct-syslogger "$HOME/.local/bin/mct-syslogger"
+    "$HOME/.local/bin/mct-syslogger" --help
+)
+```
+
+压缩包以 `mct-syslogger_linux_<架构>/` 为根目录，包含命令二进制、`tools/README.md`、`tools/THIRD_PARTY_NOTICES.md` 和 `docs/journal.md`。分发时保留许可文件，日志查询前按包内 journal 部署说明准备专用命名空间。
+
+### CI 与自动发布
+
+[CI 工作流](https://github.com/mctxyz/syslogger/blob/main/.github/workflows/ci.yml) 在面向 `main` 的 PR、`main` 推送及任意 tag 推送时运行格式、依赖一致性、`go vet` 和全量 race 测试。工具链固定为 Go 1.23.12，并通过 `GOTOOLCHAIN=local` 使用该版本。
+
+tag 的检查通过后，工作流使用 `CGO_ENABLED=0` 编译 Linux amd64、arm64 工具，打包并生成校验文件，再创建对应 tag 的 GitHub Release、自动生成发布说明并上传上述三个资产。已有 Release 会补充或更新同名资产；启用不可变发布后，GitHub 会拒绝覆盖已锁定的资产，应使用新 tag 发布新版本。工作流需要包含在推送的 tag 所指提交中。
+
+发布采用仓库内置的 `GITHUB_TOKEN`，只有发布任务获得 `contents: write`，无需配置额外 PAT。仓库需允许 GitHub Actions 运行及使用工作流中的 Actions；PR 只执行只读检查。工作流复用官方 checkout、setup-go、artifact Actions 和 [action-gh-release v3.0.3](https://github.com/softprops/action-gh-release/tree/v3.0.3)，均固定到 commit SHA。维护者在完成代码推送后，推送版本 tag 即可触发发布。
+
 ## 运行与快捷命令
 
 在仓库目录使用 Go 1.23+ 编译并运行；当前验证工具链为 Go 1.23.12：
