@@ -47,7 +47,8 @@ func waitSyncCondition(t *testing.T, condition func() bool) {
 	}
 }
 
-// fullSyncSocket 使用内核接收积压制造背压，调用方保持该接收端不读取。
+// fullSyncSocket 使用独立连接逐条填满接收队列，调用方保持该接收端不读取。
+// 复用单个填充连接可能先耗尽其发送缓冲，无法阻塞后续同步发送使用的新连接。
 func fullSyncSocket(t *testing.T) string {
 	t.Helper()
 	path := syncSocketPath(t)
@@ -57,18 +58,21 @@ func fullSyncSocket(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = receiver.Close() })
-	filler, err := net.DialUnix("unixgram", nil, address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = filler.Close() })
-	if err := filler.SetWriteDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
-		t.Fatal(err)
-	}
 	// 小数据报填满接收条数，避免仅因大包空间不足而仍允许后续小日志写入。
 	data := []byte("fill")
-	for index := 0; index < 1000; index++ {
-		if _, err := filler.Write(data); err != nil {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		filler, err := net.DialUnix("unixgram", nil, address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := filler.SetWriteDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
+			_ = filler.Close()
+			t.Fatal(err)
+		}
+		_, err = filler.Write(data)
+		_ = filler.Close()
+		if err != nil {
 			var timedOut net.Error
 			if !errors.As(err, &timedOut) || !timedOut.Timeout() {
 				t.Fatal(err)
