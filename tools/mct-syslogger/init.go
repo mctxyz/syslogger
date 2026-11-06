@@ -31,6 +31,8 @@ func parseInitOptions(args []string, help io.Writer) (hostinit.Options, error) {
   --journal-max-use SIZE  持久化 journal 总容量，默认 5G；按 1024 进制计量
   -h, --help             显示本子命令帮助
 
+执行时逐步输出命令及参数、目录创建或复用、属主权限设置、配置写入和旧受管配置清理。
+命令在执行前记录，文件操作在成功后记录；全部步骤完成后才输出最终摘要。
 初始化需要 Linux、systemd 245+、root，以及 getent、groupadd、usermod、systemctl、systemd-analyze。
 账户和写入组须由本机 files 管理；默认 files systemd 可用，外部身份源的额外授权由管理员核验。
 首次迁移前先停止旧版业务进程；命令保留日志、清单及锁文件，修复目录权限。

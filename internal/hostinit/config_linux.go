@@ -2,7 +2,6 @@ package hostinit
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,12 +27,17 @@ type configValue struct {
 // journalBaseName 关联 SDK 固定命名空间与 systemd 主文件、片段目录的名称。
 const journalBaseName = "journald@" + journalwire.Namespace + ".conf"
 
-func installedSystemdVersion(ctx context.Context) (int, error) {
-	output, err := command(ctx, "systemd-analyze", "--version")
+func (init *initializer) installedSystemdVersion() (int, error) {
+	output, err := init.command("systemd-analyze", "--version")
 	if err != nil {
 		return 0, err
 	}
-	return parseSystemdVersion(output)
+	version, err := parseSystemdVersion(output)
+	if err != nil {
+		return 0, err
+	}
+	init.logger.Printf("[检查 systemd] 版本=%d", version)
+	return version, nil
 }
 
 func parseSystemdVersion(output string) (int, error) {

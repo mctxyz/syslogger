@@ -23,6 +23,32 @@ mct-syslogger init --help
 
 命令同时准备 `/var/lib/mct-syslogger` 的共享组写权限：root 与指定账户可写，其他本机账户只读。先停止旧版写入进程再迁移权限，完成后重新登录或重启业务服务刷新组身份；额外组成员、ACL 和异常受管对象会报错，交管理员先处理。
 
+### 初始化过程输出
+
+`init` 按执行顺序向标准输出报告实际操作，最后保留完成摘要：
+
+- **命令**：执行程序的实际路径和独立参数，包括身份检查、组管理及 systemd 操作。命令在执行前记录，执行失败继续通过原有错误返回反馈；账户查询结果和配置正文不会作为过程日志倾倒。
+- **目录**：区分创建与复用，列出根目录、项目目录及配置目录的实际路径。
+- **权限**：在属主／属组、权限分别设置成功后记录对象路径、UID/GID 及 Unix 权限值。重复执行仍报告设置动作，不把相同值描述成新增变更。
+- **配置**：原子替换成功后区分创建与更新；只有旧受管文件实际删除后才报告清理，管理员文件明确报告保留。文件内容及稳定锁 inode 的迁移规则保持原样。
+- **systemd 结果**：保留 `add-wants` 返回的链接创建信息，检查通过后报告专用 socket 就绪；由 systemd 管理的运行目录和 journal 文件不假报为 `init` 直接创建。
+
+以下为已有目录、GID 为 986、systemd 248+ 时的节选示例，具体命令路径和对象取决于主机：
+
+```text
+[开始初始化] 运行账户="app" journal容量="5G"
+[执行命令] "/usr/bin/systemd-analyze" 参数=["--version"]
+[复用目录] "/var/lib/mct-syslogger"
+[设置目录属主] "/var/lib/mct-syslogger" UID=0 GID=986
+[设置目录权限] "/var/lib/mct-syslogger" mode=2775
+[更新配置] "/etc/systemd/journald@mct-syslogger.conf.d/60-mct-syslogger-init.conf" mode=0644（临时文件原子替换）
+[执行命令] "/usr/bin/systemctl" 参数=["restart" "systemd-journald@mct-syslogger.service"]
+```
+
+过程信息用于查看执行进度，不是只读预演。中断或失败时，之前已完成的操作保留；最终摘要仅在所有步骤成功后输出。
+
+### 配置与应用
+
 systemd 248+ 时，命令管理 `/etc/systemd/journald@mct-syslogger.conf.d/60-mct-syslogger-init.conf`；245–247 的命名空间尚不加载 drop-in，改为管理带工具标识的 `/etc/systemd/journald@mct-syslogger.conf`。已有非受管主文件会明确报错并保留，需管理员先调整。默认内容如下：
 
 ```ini

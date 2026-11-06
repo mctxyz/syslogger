@@ -1,7 +1,6 @@
 package hostinit
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os/user"
@@ -11,8 +10,8 @@ import (
 	"github.com/mctxyz/syslogger/internal/catalog"
 )
 
-func prepareGroup(ctx context.Context, account *user.User) (int, error) {
-	localAccount, err := command(ctx, "getent", "-s", "files", "passwd", account.Username)
+func (init *initializer) prepareGroup(account *user.User) (int, error) {
+	localAccount, err := init.command("getent", "-s", "files", "passwd", account.Username)
 	if err != nil {
 		return 0, fmt.Errorf("运行账户必须是 usermod 可管理的本机账户: %w", err)
 	}
@@ -23,15 +22,16 @@ func prepareGroup(ctx context.Context, account *user.User) (int, error) {
 	group, err := user.LookupGroup(catalog.Group)
 	var missing user.UnknownGroupError
 	if errors.As(err, &missing) {
-		if _, err := command(ctx, "groupadd", "--system", "--", catalog.Group); err != nil {
+		if _, err := init.command("groupadd", "--system", "--", catalog.Group); err != nil {
 			return 0, err
 		}
+		init.logger.Printf("[创建组] %q", catalog.Group)
 		group, err = user.LookupGroup(catalog.Group)
 	}
 	if err != nil {
 		return 0, err
 	}
-	localGroup, err := command(ctx, "getent", "-s", "files", "group", catalog.Group)
+	localGroup, err := init.command("getent", "-s", "files", "group", catalog.Group)
 	if err != nil {
 		return 0, fmt.Errorf("写入组必须由本机 files 管理: %w", err)
 	}
@@ -44,11 +44,11 @@ func prepareGroup(ctx context.Context, account *user.User) (int, error) {
 		return 0, err
 	}
 	check := func() error {
-		members, err := command(ctx, "getent", "group")
+		members, err := init.command("getent", "group")
 		if err != nil {
 			return err
 		}
-		accounts, err := command(ctx, "getent", "passwd")
+		accounts, err := init.command("getent", "passwd")
 		if err != nil {
 			return err
 		}
@@ -57,13 +57,14 @@ func prepareGroup(ctx context.Context, account *user.User) (int, error) {
 	if err := check(); err != nil {
 		return 0, err
 	}
-	if _, err := command(ctx, "usermod", "--append", "--groups", catalog.Group, "--", account.Username); err != nil {
+	if _, err := init.command("usermod", "--append", "--groups", catalog.Group, "--", account.Username); err != nil {
 		return 0, err
 	}
+	init.logger.Printf("[设置账户组] 账户=%q 附加组=%q", account.Username, catalog.Group)
 	if err := check(); err != nil {
 		return 0, err
 	}
-	identities, err := command(ctx, "getent", "initgroups", account.Username)
+	identities, err := init.command("getent", "initgroups", account.Username)
 	if err != nil {
 		return 0, err
 	}
@@ -73,6 +74,7 @@ func prepareGroup(ctx context.Context, account *user.User) (int, error) {
 	}
 	for _, identity := range fields[1:] {
 		if identity == group.Gid {
+			init.logger.Printf("[检查账户组] 账户=%q 已具备 GID=%d", account.Username, gid)
 			return gid, nil
 		}
 	}

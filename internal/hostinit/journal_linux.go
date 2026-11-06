@@ -1,7 +1,6 @@
 package hostinit
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -46,8 +45,8 @@ func journalConfig(maxUse string) string {
 }
 
 // writeJournalConfig 只原子替换工具自己生成的片段，保留管理员独立配置。
-func writeJournalConfig(path, content string) error {
-	directory, err := openConfigDirectory(filepath.Dir(path), true)
+func (init *initializer) writeJournalConfig(path, content string) error {
+	directory, err := init.openConfigDirectory(filepath.Dir(path), true)
 	if err != nil {
 		return err
 	}
@@ -68,17 +67,26 @@ func writeJournalConfig(path, content string) error {
 	if _, err := io.WriteString(file, content); err != nil {
 		return err
 	}
-	if err := file.Chmod(0644); err != nil {
+	mode := os.FileMode(0644)
+	if err := file.Chmod(mode); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), path)
+	if err := os.Rename(file.Name(), path); err != nil {
+		return err
+	}
+	if found {
+		init.logger.Printf("[更新配置] %q mode=%04o（临时文件原子替换）", path, mode.Perm())
+	} else {
+		init.logger.Printf("[创建配置] %q mode=%04o（临时文件原子替换）", path, mode.Perm())
+	}
+	return nil
 }
 
-func openConfigDirectory(path string, create bool) (*os.File, error) {
-	directory, err := openDirectory(path, create, 0755)
+func (init *initializer) openConfigDirectory(path string, create bool) (*os.File, error) {
+	directory, err := init.openDirectory(path, create, 0755)
 	if err != nil {
 		return nil, err
 	}
@@ -118,9 +126,10 @@ func managedConfigFile(directory *os.File, name string) (bool, bool, error) {
 	return true, strings.HasPrefix(string(data), configMarker), nil
 }
 
-func removeManagedConfig(path string) error {
-	directory, err := openConfigDirectory(filepath.Dir(path), false)
+func (init *initializer) removeManagedConfig(path string) error {
+	directory, err := init.openConfigDirectory(filepath.Dir(path), false)
 	if errors.Is(err, unix.ENOENT) {
+		init.logger.Printf("[无需清理] %q 不存在", path)
 		return nil
 	}
 	if err != nil {
@@ -128,30 +137,46 @@ func removeManagedConfig(path string) error {
 	}
 	defer directory.Close()
 	found, owned, err := managedConfigFile(directory, filepath.Base(path))
-	if err != nil || !found || !owned {
+	if err != nil {
 		return err
 	}
-	return unix.Unlinkat(int(directory.Fd()), filepath.Base(path), 0)
+	if !found {
+		init.logger.Printf("[无需清理] %q 不存在", path)
+		return nil
+	}
+	if !owned {
+		init.logger.Printf("[保留配置] %q 非本工具受管文件", path)
+		return nil
+	}
+	if err := unix.Unlinkat(int(directory.Fd()), filepath.Base(path), 0); err != nil {
+		return err
+	}
+	init.logger.Printf("[清理旧配置] %q", path)
+	return nil
 }
 
-func prepareJournal(ctx context.Context, maxUse string, version int) error {
+func (init *initializer) prepareJournal(maxUse string, version int) error {
 	mainPath := filepath.Join("/etc/systemd", journalBaseName)
 	dropinPath := filepath.Join(mainPath+".d", configName)
 	target, previous := dropinPath, mainPath
 	if version < 248 {
 		target, previous = mainPath, dropinPath
 	}
-	if err := writeJournalConfig(target, journalConfig(maxUse)); err != nil {
+	init.logger.Printf("[配置路径] systemd=%d 使用 %q", version, target)
+	if err := init.writeJournalConfig(target, journalConfig(maxUse)); err != nil {
 		return err
 	}
 	sources, err := journalConfigSources([]string{"/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"}, version)
 	if err != nil {
 		return err
 	}
+	for _, source := range sources {
+		init.logger.Printf("[读取配置] %q", source.path)
+	}
 	if err := checkJournalConfig(sources, journalSettings(maxUse)); err != nil {
 		return err
 	}
-	if err := removeManagedConfig(previous); err != nil {
+	if err := init.removeManagedConfig(previous); err != nil {
 		return err
 	}
 	// 删除旧主文件可能使较低优先级主文件显露，重启前核验最终实际集合。
@@ -159,14 +184,17 @@ func prepareJournal(ctx context.Context, maxUse string, version int) error {
 	if err != nil {
 		return err
 	}
+	for _, source := range sources {
+		init.logger.Printf("[读取配置] %q", source.path)
+	}
 	if err := checkJournalConfig(sources, journalSettings(maxUse)); err != nil {
 		return err
 	}
-	return activateJournal(ctx)
+	return init.activateJournal()
 }
 
 // activateJournal 每次都应用配置，覆盖上次在写入后、应用前中断的情况。
-func activateJournal(ctx context.Context) error {
+func (init *initializer) activateJournal() error {
 	socket := "systemd-journald@" + journalwire.Namespace + ".socket"
 	service := "systemd-journald@" + journalwire.Namespace + ".service"
 	for _, args := range [][]string{
@@ -176,8 +204,12 @@ func activateJournal(ctx context.Context) error {
 		{"is-active", "--quiet", socket},
 		{"is-active", "--quiet", service},
 	} {
-		if _, err := command(ctx, "systemctl", args...); err != nil {
+		output, err := init.command("systemctl", args...)
+		if err != nil {
 			return err
+		}
+		if args[0] == "add-wants" && strings.TrimSpace(output) != "" {
+			init.logger.Printf("[systemctl 输出] %s", strings.TrimSpace(output))
 		}
 	}
 	info, err := os.Lstat(journalwire.SocketPath)
@@ -187,6 +219,7 @@ func activateJournal(ctx context.Context) error {
 	if info.Mode()&os.ModeSocket == 0 {
 		return fmt.Errorf("专用日志入口 %s 不是 socket", journalwire.SocketPath)
 	}
+	init.logger.Printf("[检查日志入口] %q 为 Unix socket", journalwire.SocketPath)
 	return nil
 }
 

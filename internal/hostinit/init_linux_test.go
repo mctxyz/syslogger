@@ -70,7 +70,7 @@ func TestCatalogMigrationPreservesDataAndLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := prepareCatalog(root, os.Getegid()); err != nil {
+		if err := testInitializer(io.Discard).prepareCatalog(root, os.Getegid()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -135,7 +135,7 @@ func TestMigrationRejectsLinksAndACL(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := prepareCatalog(root, os.Getegid()); err == nil {
+			if err := testInitializer(io.Discard).prepareCatalog(root, os.Getegid()); err == nil {
 				t.Fatal("未拒绝越界链接或 ACL")
 			}
 			info, err := os.Stat(outside)
@@ -150,7 +150,7 @@ func TestJournalConfigOwnershipAndOverrides(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "journal.conf.d")
 	path := filepath.Join(directory, configName)
 	for _, capacity := range []string{"5G", "5G", "10G"} {
-		if err := writeJournalConfig(path, journalConfig(capacity)); err != nil {
+		if err := testInitializer(io.Discard).writeJournalConfig(path, journalConfig(capacity)); err != nil {
 			t.Fatal(err)
 		}
 		data, err := os.ReadFile(filepath.Join(directory, configName))
@@ -171,7 +171,7 @@ func TestJournalConfigOwnershipAndOverrides(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, configName), []byte("[Journal]\nCompress=no\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJournalConfig(path, journalConfig("5G")); err == nil {
+	if err := testInitializer(io.Discard).writeJournalConfig(path, journalConfig("5G")); err == nil {
 		t.Fatal("覆盖了同名非受管配置")
 	}
 	if !sameSetting("SystemMaxUse", "5120M", "5G") || !sameSetting("Compress", "true", "yes") {
@@ -184,7 +184,7 @@ func TestPrivateConfigDirectoryIsPreserved(t *testing.T) {
 	if err := os.Chmod(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJournalConfig(filepath.Join(directory, configName), journalConfig("5G")); err != nil {
+	if err := testInitializer(io.Discard).writeJournalConfig(filepath.Join(directory, configName), journalConfig("5G")); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(directory)
@@ -207,13 +207,13 @@ func TestActivationRetriesAfterInterruptedApply(t *testing.T) {
 	t.Setenv("PATH", directory)
 	t.Setenv("INIT_TEST_LOG", logPath)
 	t.Setenv("INIT_TEST_FAIL", failPath)
-	if err := activateJournal(context.Background()); err == nil {
+	if err := testInitializer(io.Discard).activateJournal(); err == nil {
 		t.Fatal("未报告首次应用失败")
 	}
 	if err := os.Remove(failPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := activateJournal(context.Background()); err == nil {
+	if err := testInitializer(io.Discard).activateJournal(); err == nil {
 		t.Fatal("未报告入口尚未就绪")
 	}
 	data, err := os.ReadFile(logPath)
@@ -235,10 +235,10 @@ func TestSystemdOfflineConfiguration(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(directory), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJournalConfig(filepath.Join(directory, configName), journalConfig("5G")); err != nil {
+	if err := testInitializer(io.Discard).writeJournalConfig(filepath.Join(directory, configName), journalConfig("5G")); err != nil {
 		t.Fatal(err)
 	}
-	merged, err := command(context.Background(), "systemd-analyze", "--root="+root, "--no-pager", "cat-config", base)
+	merged, err := testInitializer(io.Discard).command("systemd-analyze", "--root="+root, "--no-pager", "cat-config", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestSystemdOfflineConfiguration(t *testing.T) {
 	if err := os.WriteFile(conflict, []byte("[Journal]\nSystemMaxUse=1G\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	merged, err = command(context.Background(), "systemd-analyze", "--root="+root, "--no-pager", "cat-config", base)
+	merged, err = testInitializer(io.Discard).command("systemd-analyze", "--root="+root, "--no-pager", "cat-config", base)
 	if err != nil {
 		t.Fatal(err)
 	}

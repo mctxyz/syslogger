@@ -1,6 +1,7 @@
 package hostinit
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,10 +43,10 @@ func TestCleanupRevealsLowerPriorityMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	main := filepath.Join(etc, journalBaseName)
-	if err := writeJournalConfig(main, journalConfig("5G")); err != nil {
+	if err := testInitializer(io.Discard).writeJournalConfig(main, journalConfig("5G")); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJournalConfig(filepath.Join(main+".d", configName), journalConfig("5G")); err != nil {
+	if err := testInitializer(io.Discard).writeJournalConfig(filepath.Join(main+".d", configName), journalConfig("5G")); err != nil {
 		t.Fatal(err)
 	}
 	exposed := filepath.Join(run, journalBaseName)
@@ -59,7 +60,7 @@ func TestCleanupRevealsLowerPriorityMain(t *testing.T) {
 	if err := checkJournalConfig(sources, journalSettings("5G")); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeManagedConfig(main); err != nil {
+	if err := testInitializer(io.Discard).removeManagedConfig(main); err != nil {
 		t.Fatal(err)
 	}
 	sources, err = journalConfigSources([]string{etc, run}, 256)
@@ -139,13 +140,13 @@ func TestManagedConfigVersionMigration(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "systemd")
 	main := filepath.Join(directory, journalBaseName)
 	dropin := filepath.Join(main+".d", configName)
-	if err := writeJournalConfig(main, journalConfig("5G")); err != nil {
+	if err := testInitializer(io.Discard).writeJournalConfig(main, journalConfig("5G")); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJournalConfig(dropin, journalConfig("10G")); err != nil {
+	if err := testInitializer(io.Discard).writeJournalConfig(dropin, journalConfig("10G")); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeManagedConfig(main); err != nil {
+	if err := testInitializer(io.Discard).removeManagedConfig(main); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(main); !os.IsNotExist(err) {
@@ -154,17 +155,17 @@ func TestManagedConfigVersionMigration(t *testing.T) {
 	if err := os.WriteFile(main, []byte("[Journal]\nCompress=no\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeManagedConfig(main); err != nil {
+	if err := testInitializer(io.Discard).removeManagedConfig(main); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(main)
 	if err != nil || !strings.Contains(string(data), "Compress=no") {
 		t.Fatalf("升级清理删除了管理员配置: %s %v", data, err)
 	}
-	if err := removeManagedConfig(dropin); err != nil {
+	if err := testInitializer(io.Discard).removeManagedConfig(dropin); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeManagedConfig(dropin); err != nil {
+	if err := testInitializer(io.Discard).removeManagedConfig(dropin); err != nil {
 		t.Fatalf("中断后的重复清理不能恢复: %v", err)
 	}
 }

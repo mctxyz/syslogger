@@ -13,15 +13,24 @@ import (
 )
 
 // openDirectory 拒绝目录入口的符号链接，后续迁移通过目录 fd 定位子对象。
-func openDirectory(path string, create bool, mode os.FileMode) (*os.File, error) {
+func (init *initializer) openDirectory(path string, create bool, mode os.FileMode) (*os.File, error) {
+	created := false
 	if create {
-		if err := os.Mkdir(path, mode); err != nil && !errors.Is(err, os.ErrExist) {
+		err := os.Mkdir(path, mode)
+		if err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, err
+		}
+		if err == nil {
+			created = true
+			init.logger.Printf("[创建目录] %q", path)
 		}
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("打开目录 %s: %w", path, err)
+	}
+	if create && !created {
+		init.logger.Printf("[复用目录] %q", path)
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }
@@ -54,26 +63,32 @@ func inspect(file *os.File, directory bool) (unix.Stat_t, error) {
 	return stat, nil
 }
 
-func prepareCatalog(path string, gid int) error {
-	root, err := openDirectory(path, true, catalog.DirectoryMode)
+func (init *initializer) prepareCatalog(path string, gid int) error {
+	root, err := init.openDirectory(path, true, catalog.DirectoryMode)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	return migrateDirectory(root, gid, true)
+	return init.migrateDirectory(root, gid, true)
 }
 
 // migrateDirectory 保留文件内容及锁 inode，先收紧目录再按 fd 迁移受管子对象。
-func migrateDirectory(directory *os.File, gid int, root bool) error {
+func (init *initializer) migrateDirectory(directory *os.File, gid int, root bool) error {
 	if _, err := inspect(directory, true); err != nil {
 		return err
 	}
 	if err := directory.Chown(os.Geteuid(), gid); err != nil {
 		return err
 	}
+	init.logger.Printf("[设置目录属主] %q UID=%d GID=%d", directory.Name(), os.Geteuid(), gid)
 	if err := directory.Chmod(catalog.DirectoryMode); err != nil {
 		return err
 	}
+	mode := uint32(catalog.DirectoryMode.Perm())
+	if catalog.DirectoryMode&os.ModeSetgid != 0 {
+		mode |= unix.S_ISGID
+	}
+	init.logger.Printf("[设置目录权限] %q mode=%04o", directory.Name(), mode)
 	names, err := directory.Readdirnames(-1)
 	if err != nil {
 		return err
@@ -97,14 +112,21 @@ func migrateDirectory(directory *os.File, gid int, root bool) error {
 		}
 		file := os.NewFile(uintptr(fd), filepath.Join(directory.Name(), name))
 		if root {
-			err = migrateDirectory(file, gid, false)
+			init.logger.Printf("[复用目录] %q", file.Name())
+			err = init.migrateDirectory(file, gid, false)
 		} else {
 			_, err = inspect(file, false)
 			if err == nil {
 				err = file.Chown(os.Geteuid(), gid)
+				if err == nil {
+					init.logger.Printf("[设置文件属主] %q UID=%d GID=%d", file.Name(), os.Geteuid(), gid)
+				}
 			}
 			if err == nil {
 				err = file.Chmod(catalog.FileMode)
+				if err == nil {
+					init.logger.Printf("[设置文件权限] %q mode=%04o", file.Name(), catalog.FileMode)
+				}
 			}
 		}
 		closeErr := file.Close()
