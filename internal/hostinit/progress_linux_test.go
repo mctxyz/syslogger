@@ -27,13 +27,13 @@ func TestDirectoryProgressMatchesActualCreation(t *testing.T) {
 	var output bytes.Buffer
 	init := testInitializer(&output)
 	path := filepath.Join(t.TempDir(), "catalog")
-	if err := init.prepareCatalog(path, os.Getegid()); err != nil {
+	if err := init.prepareCatalog(path, os.Geteuid(), os.Getegid()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), fmt.Sprintf("[创建目录] %q", path)) {
 		t.Fatalf("未报告实际创建的目录: %s", &output)
 	}
-	if !strings.Contains(output.String(), fmt.Sprintf("[设置目录权限] %q mode=2775", path)) {
+	if !strings.Contains(output.String(), fmt.Sprintf("[设置目录权限] %q mode=0755", path)) {
 		t.Fatalf("没有使用 Unix 权限表示: %s", &output)
 	}
 	info, err := os.Stat(path)
@@ -41,7 +41,7 @@ func TestDirectoryProgressMatchesActualCreation(t *testing.T) {
 		t.Fatalf("过程输出与实际权限不一致: %v, %v", info, err)
 	}
 	output.Reset()
-	if err := init.prepareCatalog(path, os.Getegid()); err != nil {
+	if err := init.prepareCatalog(path, os.Geteuid(), os.Getegid()); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(output.String(), "[创建目录]") || !strings.Contains(output.String(), fmt.Sprintf("[复用目录] %q", path)) {
@@ -80,11 +80,11 @@ func TestCatalogProgressNamesEachManagedObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := init.prepareCatalog(root, os.Getegid()); err != nil {
+	if err := init.prepareCatalog(root, os.Geteuid(), os.Getegid()); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{root, project} {
-		if !strings.Contains(output.String(), fmt.Sprintf("[设置目录权限] %q mode=2775", path)) {
+		if !strings.Contains(output.String(), fmt.Sprintf("[设置目录权限] %q mode=0755", path)) {
 			t.Fatalf("缺少目录的设置结果: %s", path)
 		}
 	}
@@ -92,7 +92,7 @@ func TestCatalogProgressNamesEachManagedObject(t *testing.T) {
 		if !strings.Contains(output.String(), fmt.Sprintf("[设置文件属主] %q UID=%d GID=%d", path, os.Geteuid(), os.Getegid())) {
 			t.Fatalf("缺少文件的属主设置: %s", path)
 		}
-		if !strings.Contains(output.String(), fmt.Sprintf("[设置文件权限] %q mode=0664", path)) {
+		if !strings.Contains(output.String(), fmt.Sprintf("[设置文件权限] %q mode=0644", path)) {
 			t.Fatalf("缺少文件的权限设置: %s", path)
 		}
 	}

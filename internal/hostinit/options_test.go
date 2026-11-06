@@ -19,16 +19,15 @@ func TestCapacityAndOptions(t *testing.T) {
 		}
 	}
 	for _, opts := range []Options{
-		{JournalMaxUse: [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"}},
-		{User: "app\nroot", JournalMaxUse: [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"}},
-		{User: "app"},
+		{},
+		{JournalMaxUse: [journalwire.GroupCount]string{"1G", "2G", "", "1G"}},
 	} {
 		if err := opts.Validate(); err == nil {
 			t.Fatalf("接受了无效选项 %+v", opts)
 		}
 	}
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
-		opts := Options{User: "app"}
+		var opts Options
 		for current := journalwire.DebugGroup; current < journalwire.GroupCount; current++ {
 			opts.JournalMaxUse[current] = DefaultJournalMaxUse(current)
 		}

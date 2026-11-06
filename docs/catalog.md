@@ -4,15 +4,15 @@
 
 ## 开启目录
 
-`CatalogEnabled` 默认关闭，开启后将实际使用的日志身份、描述和最近三个自然小时的接收量发布到固定的 `/var/lib/mct-syslogger`，与 `TMPDIR`、状态维护及指标出口配置独立。部署时先使用配套 CLI 的独立子命令准备目录权限及专用 journal，将 `appuser` 替换为已有的程序运行账户：
+`CatalogEnabled` 默认关闭，开启后将实际使用的日志身份、描述和最近三个自然小时的接收量发布到固定的 `/var/lib/mct-syslogger`，与 `TMPDIR`、状态维护及指标出口配置独立。部署时先准备本机 `app` 账户，再使用配套 CLI 的独立子命令准备目录权限及专用 journal：
 
 ```sh
-sudo mct-syslogger init --user appuser
+sudo mct-syslogger init
 # 四个空间默认合计 5G，可独立调整其中一项。
-sudo mct-syslogger init --user appuser --journal-info-max-use 10G
+sudo mct-syslogger init --journal-info-max-use 10G
 ```
 
-初始化需要 Linux、systemd 245+ 及 root，完成后重新登录或重启业务服务刷新组身份。首次迁移前先停止旧版写入进程；容量、压缩和管理员配置保护见[部署说明](journal.md)。业务开启目录功能的示例：
+初始化需要 Linux、systemd 245+、root 及已有的本机 `app` 账户。首次迁移前先停止旧版写入进程；容量、压缩和管理员配置保护见[部署说明](journal.md)。业务开启目录功能的示例：
 
 ```go
 manager, err := syslogger.New(syslogger.Config{
@@ -68,7 +68,13 @@ rpc.Info("RPC 已连接", nil)
 
 ## 权限与故障处理
 
-根目录及项目目录使用 `mct-syslogger` 组和 `2775` 权限，JSON 文件及项目 `.catalog.lock` 为 `0664`。root 与指定运行账户可写，其他账户只读；setgid 让新建对象逐层继承共享组。全局根目录由 `init` 准备，SDK 只创建其中的项目目录和文件，新对象由当前运行账户持有，既有对象的所有权保持稳定。发布和清理通过 [gofrs/flock v0.12.1](https://github.com/gofrs/flock/tree/v0.12.1) 协调项目文件锁，在锁内读取、合并小时增量并使用同目录临时文件原子替换。项目锁文件保持稳定，日志调用线程只维护内存活动，文件 I/O 在后台执行。
+名称根目录、项目目录、JSON 及项目 `.catalog.lock` 固定由 `app` 及其主 GID 持有。目录使用 `0755`，JSON 和锁文件使用 `0644`，普通账户只读；写入由 `app` 或具备相应文件操作权限的 root 进程执行。`init` 解析账户的实际 UID/GID 并迁移受管对象，SDK 以初始化根目录的属主为身份来源，通过新对象的文件描述符设置属主。因此过渡期 root 程序创建项目目录、锁文件及原子替换清单后，后续 `app` 程序仍能继续维护。
+
+发布和清理通过 [gofrs/flock v0.12.1](https://github.com/gofrs/flock/tree/v0.12.1) 协调项目文件锁，在锁内读取、合并小时增量并使用同目录临时文件原子替换。项目锁文件保持稳定，日志调用线程只维护内存活动，文件 I/O 在后台执行。systemd 配置由 root 管理，journal 存储由对应 journald 实例维护，与名称目录的所有权各自独立。
+
+### 从共享组权限迁移
+
+先停止全部旧 SDK 写入进程，部署配套的新 SDK 和 CLI，再执行 `sudo mct-syslogger init`。初始化保留 JSON 内容和锁 inode，将受管目录和文件迁移到 `app` 及其主 GID，并应用新权限。随后可同时运行已升级的 root 和 `app` 程序；旧 SDK 的对象创建规则不同，不应继续写入同一目录。系统账户配置保持原样，历史专用组的清理由管理员核对其他用途后处理。
 
 目录缺失、权限不足或发布／清理失败通过标准日志诊断；开启状态维护时，仅内置 `syslogger_manager` 因目录不可用而降级。业务组件健康、日志发送、指标出口及业务关闭结果保持独立。失败增量留在内存并按原周期重试；空闲周期也复查根目录，使初始化完成后的恢复不依赖新增日志。发布与清理分别恢复，注册及配置故障仍按各自条件恢复；关闭状态维护时只诊断，关闭目录功能时不检查。目录不可用期间，`--list` 可能为空或显示旧记录，已知身份仍可直接用于日志查询。
 

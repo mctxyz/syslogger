@@ -31,7 +31,7 @@ func TestPermissionsUnderRestrictiveUmask(t *testing.T) {
 		} {
 			info, err := os.Stat(name)
 			if err != nil || info.Mode()&(os.ModeSetgid|os.ModePerm) != mode {
-				t.Fatalf("umask 破坏共享权限: %s %v %v", name, info, err)
+				t.Fatalf("umask 破坏目录权限: %s %v %v", name, info, err)
 			}
 		}
 		return

@@ -33,7 +33,7 @@ main() {
                     '用法：bash install.sh' \
                     '下载最新 GitHub Release，交互安装并运行 mct-syslogger init。' \
                     '支持 Linux amd64/arm64，需要交互终端、curl、GNU tar/coreutils、awk、getent，以及 root 或 sudo。' \
-                    '安装前缀默认 /usr/local；运行账户必填；debug/info/warning/error 空间默认分别 1G/2G/1G/1G。'
+                    '安装前缀默认 /usr/local；名称目录固定由已有 app 账户持有；debug/info/warning/error 空间默认分别 1G/2G/1G/1G。'
                 return
                 ;;
             *)
@@ -58,6 +58,7 @@ main() {
             die "不支持的 CPU 架构：$(uname -m)"
             ;;
     esac
+    getent -s files passwd app >/dev/null || die '需要已有的本机 app 账户，请管理员先准备该账户。'
 
     local -a elevate=()
     if [[ $(id -u) != 0 ]]; then
@@ -126,8 +127,16 @@ main() {
     if ! "$candidate" "${probe_args[@]}" --help >"$work_dir/init-help.txt" 2>&1; then
         die '发布包不支持四个等级空间的 init 参数或无法运行，请等待配套 Release 并检查架构。'
     fi
+    # 固定账户版本会拒绝旧账户参数；精确检查参数错误，避免安装要求账户交互的旧 Release。
+    local probe_status
+    if "$candidate" init --user=app --help >"$work_dir/account-probe.txt" 2>&1; then
+        die '发布包仍使用可选运行账户，请等待固定 app 所有者的配套 Release。'
+    else
+        probe_status=$?
+    fi
+    [[ "$probe_status" -eq 2 ]] || die '无法确认发布包的固定账户接口，未安装或初始化。'
 
-    local prefix runtime_user target doc_dir status
+    local prefix target doc_dir status
     while true; do
         prompt '安装前缀 [/usr/local]（命令放入其 bin/）：' '/usr/local'
         prefix=$REPLY
@@ -139,29 +148,19 @@ main() {
         fi
         printf '请输入绝对安装路径，且不能使用系统根目录。\n' >&2
     done
-    while true; do
-        prompt '已有程序运行账户（必填）：' ''
-        runtime_user=$REPLY
-        if [[ -n "$runtime_user" ]]; then
-            if getent -- passwd "$runtime_user" >/dev/null; then
-                break
-            fi
-        fi
-        printf '请输入一个已存在的运行账户。\n' >&2
-    done
     for index in "${!groups[@]}"; do
         prompt "${groups[$index]} journal 持久化容量 [${capacities[$index]}]（正整数字节或 K/M/G/T/P/E）：" "${capacities[$index]}"
         capacities[$index]=$REPLY
     done
     target="$prefix/bin/mct-syslogger"
     doc_dir="$prefix/share/doc/mct-syslogger"
-    printf '\n版本：%s（linux/%s）\n命令：%s\n文档：%s\n运行账户：%s\n' \
-        "$tag" "$arch" "$target" "$doc_dir" "$runtime_user"
+    printf '\n版本：%s（linux/%s）\n命令：%s\n文档：%s\n名称目录所有者：app\n' \
+        "$tag" "$arch" "$target" "$doc_dir"
     for index in "${!groups[@]}"; do
         printf 'journal %s 容量：%s\n' "${groups[$index]}" "${capacities[$index]}"
     done
     printf '%s\n' \
-        '将更新上述命令和文档，并以 root 运行 init：调整目录组权限、应用配置、重启四个专用 journald 实例。' \
+        '将更新上述命令和文档，并以 root 运行 init：将名称目录及文件迁移给 app、应用配置、重启四个专用 journald 实例。' \
         '需要 Linux、systemd 245+ 及 init 所需系统工具；账户、权限和容量规则由 init 校验。' \
         '首次迁移前请停止旧版业务进程；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
     prompt '确认安装并初始化？[y/N]：' 'n'
@@ -180,12 +179,12 @@ main() {
         "${elevate[@]}" install -m 0644 -T -- "$work_dir/unpacked/$package/$relative" "$doc_dir/$relative"
     done
     "${elevate[@]}" install -m 0755 -T -- "$candidate" "$target"
-    local -a init_args=(init "--user=$runtime_user")
+    local -a init_args=(init)
     for index in "${!groups[@]}"; do
         init_args+=("--journal-${groups[$index]}-max-use=${capacities[$index]}")
     done
     if "${elevate[@]}" "$target" "${init_args[@]}"; then
-        printf '安装及初始化完成：%s\n请重新登录或重启业务服务以刷新组身份；日志读取权限仍由管理员管理。\n' "$target"
+        printf '安装及初始化完成：%s\n名称目录由 app 持有，日志读取权限仍由管理员管理。\n' "$target"
     else
         status=$?
         printf '命令已安装到 %s，但初始化失败；已完成步骤保留，请修正原因后重跑 init。\n' "$target" >&2

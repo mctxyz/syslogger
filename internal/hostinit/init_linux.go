@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/user"
 	"strings"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
@@ -26,15 +25,15 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 		return err
 	}
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("初始化需要 root，请使用 sudo mct-syslogger init --user %s", opts.User)
+		return fmt.Errorf("初始化需要 root，请使用 sudo mct-syslogger init")
 	}
-	for _, name := range []string{"getent", "groupadd", "usermod", "systemctl", "systemd-analyze"} {
+	for _, name := range []string{"systemctl", "systemd-analyze"} {
 		if _, err := exec.LookPath(name); err != nil {
 			return fmt.Errorf("初始化需要系统工具 %s: %w", name, err)
 		}
 	}
 	init := initializer{ctx: ctx, logger: log.New(output, "", 0)}
-	init.logger.Printf("[开始初始化] 运行账户=%q", opts.User)
+	init.logger.Printf("[开始初始化] 目录所有者=%q", catalog.User)
 	version, err := init.installedSystemdVersion()
 	if err != nil {
 		return err
@@ -52,15 +51,11 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 			}
 		}
 	}
-	account, err := user.Lookup(opts.User)
+	uid, gid, err := init.prepareAccount()
 	if err != nil {
-		return fmt.Errorf("查找运行账户: %w", err)
+		return err
 	}
-	gid, err := init.prepareGroup(account)
-	if err != nil {
-		return fmt.Errorf("准备目录写入组: %w", err)
-	}
-	if err := init.prepareCatalog(catalog.Root, gid); err != nil {
+	if err := init.prepareCatalog(catalog.Root, uid, gid); err != nil {
 		return fmt.Errorf("准备名称目录: %w", err)
 	}
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
@@ -68,7 +63,7 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 			return fmt.Errorf("准备专用 journal %s: %w", group.Namespace(), err)
 		}
 	}
-	if _, err := fmt.Fprintf(output, "初始化完成：目录 %s，写入组 %s，账户 %s；四空间持久化与压缩开启。\n", catalog.Root, catalog.Group, account.Username); err != nil {
+	if _, err := fmt.Fprintf(output, "初始化完成：目录 %s，所有者 %s（UID=%d GID=%d）；四空间持久化与压缩开启。\n", catalog.Root, catalog.User, uid, gid); err != nil {
 		return err
 	}
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
@@ -76,7 +71,7 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 			return err
 		}
 	}
-	_, err = fmt.Fprintln(output, "请重新登录或重启业务服务以刷新组身份。")
+	_, err = fmt.Fprintln(output, "名称目录权限为 0755，清单和锁文件为 0644。")
 	return err
 }
 

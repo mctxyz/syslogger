@@ -35,12 +35,13 @@ func preparedRoot(t *testing.T) string {
 
 func TestUninitializedPermissionsAreNotRepairedBySDK(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("POSIX 目录共享权限")
+		t.Skip("POSIX 目录权限")
 	}
 	for name, mode := range map[string]os.FileMode{
-		"other-write":    0777,
-		"missing-setgid": 0775,
-		"sticky":         DirectoryMode | os.ModeSticky,
+		"other-write": 0777,
+		"group-write": 0775,
+		"setgid":      DirectoryMode | os.ModeSetgid,
+		"sticky":      DirectoryMode | os.ModeSticky,
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -571,7 +572,7 @@ func TestLegacyTotalIsNotMigratedToHourlyCounts(t *testing.T) {
 	now := time.Now().UTC()
 	createdAt := now.Add(-24 * time.Hour)
 	path := store.Path("p", "i")
-	if err := sharedDirectory(filepath.Dir(path)); err != nil {
+	if err := store.projectDirectory(filepath.Dir(path)); err != nil {
 		t.Fatal(err)
 	}
 	legacy := map[string]any{

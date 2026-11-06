@@ -17,18 +17,14 @@ func DefaultJournalMaxUse(group journalwire.Group) string {
 	return "1G"
 }
 
-// Options 仅由 init 子命令提供，运行账户必须明确指定。
+// Options 由 init 子命令提供四个等级空间的容量。
 type Options struct {
-	User string
 	// JournalMaxUse 按 journalwire.Group 索引保存各空间的独立容量。
 	JournalMaxUse [journalwire.GroupCount]string
 }
 
-// Validate 在特权操作前检查用户参数和容量，拒绝配置文件注入。
+// Validate 在特权操作前检查容量，拒绝配置文件注入。
 func (o Options) Validate() error {
-	if o.User == "" || strings.ContainsAny(o.User, "\x00\r\n:/") {
-		return fmt.Errorf("--user 必须指定已存在的程序运行账户")
-	}
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
 		if _, err := sizeBytes(o.JournalMaxUse[group]); err != nil {
 			return fmt.Errorf("--journal-%s-max-use: %w", group.Name(), err)

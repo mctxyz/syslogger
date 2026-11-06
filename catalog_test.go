@@ -18,7 +18,7 @@ import (
 	"github.com/mctxyz/syslogger/internal/logging"
 )
 
-// preparedCatalogRoot 在隔离目录中准备与管理员初始化一致的共享权限。
+// preparedCatalogRoot 在隔离目录中准备与管理员初始化一致的目录权限。
 func preparedCatalogRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -21,35 +22,23 @@ func TestInitRequiresRoot(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("不在真实 root 环境运行主机初始化")
 	}
-	err := Run(context.Background(), Options{User: "app", JournalMaxUse: [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"}}, io.Discard)
+	err := Run(context.Background(), Options{JournalMaxUse: [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"}}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "需要 root") {
 		t.Fatalf("普通账户应在任何主机变更前被拒绝: %v", err)
 	}
 }
 
-func TestGroupMembership(t *testing.T) {
-	target := &user.User{Username: "app", Uid: "1000"}
-	passwd := "root:x:0:0::/:/bin/sh\napp:x:1000:1000::/:/bin/sh\nother:x:1001:1001::/:/bin/sh\n"
-	if err := checkGroupMembers(passwd, "mct-syslogger:x:500:root,app", target, "500"); err != nil {
-		t.Fatal(err)
-	}
-	for _, scenario := range []struct {
-		passwd string
-		group  string
-	}{
-		{passwd, "mct-syslogger:x:500:app,other"},
-		{passwd, "mct-syslogger:x:500:app\nlegacy:x:500:other"},
-		{passwd, "mct-syslogger:x:500:app\nmct-syslogger:x:500:other"},
-		{strings.Replace(passwd, "1001:1001", "1001:500", 1), "mct-syslogger:x:500:app"},
-		{passwd, "wrong:x:500:app"},
-		{"invalid", "mct-syslogger:x:500:app"},
-	} {
-		if err := checkGroupMembers(scenario.passwd, scenario.group, target, "500"); err == nil {
-			t.Fatal("未拒绝额外写入成员或不完整的账户数据")
+func TestFixedAccountLookup(t *testing.T) {
+	account, lookupErr := user.Lookup(catalog.User)
+	uid, gid, err := testInitializer(io.Discard).prepareAccount()
+	if lookupErr != nil {
+		if err == nil {
+			t.Fatal("固定账户不存在时未报错")
 		}
+		return
 	}
-	if err := checkGroupMembers(passwd, "mct-syslogger:x:500:app\nlegacy:x:500:root\nother:x:600:other", target, "500"); err != nil {
-		t.Fatalf("拒绝了合法别名组或不同 GID 的账户: %v", err)
+	if err != nil || strconv.Itoa(uid) != account.Uid || strconv.Itoa(gid) != account.Gid {
+		t.Fatalf("固定账户身份解析错误: uid=%d gid=%d err=%v", uid, gid, err)
 	}
 }
 
@@ -71,7 +60,7 @@ func TestCatalogMigrationPreservesDataAndLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := testInitializer(io.Discard).prepareCatalog(root, os.Getegid()); err != nil {
+		if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -136,7 +125,7 @@ func TestMigrationRejectsLinksAndACL(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := testInitializer(io.Discard).prepareCatalog(root, os.Getegid()); err == nil {
+			if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err == nil {
 				t.Fatal("未拒绝越界链接或 ACL")
 			}
 			info, err := os.Stat(outside)

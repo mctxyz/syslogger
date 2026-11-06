@@ -20,9 +20,9 @@ SDK 按真实日志等级将每条结构化记录交给一个专用 journal 命�
 需要支持 journal namespaces 的 Linux 主机及 systemd 245+。管理员使用独立的初始化子命令准备主机，SDK 和日常查询只使用已经准备的入口：
 
 ```sh
-sudo mct-syslogger init --user appuser
+sudo mct-syslogger init
 # 可独立设置四项；省略的项目使用各自默认值。
-sudo mct-syslogger init --user appuser \
+sudo mct-syslogger init \
   --journal-debug-max-use 1G \
   --journal-info-max-use 2G \
   --journal-warning-max-use 1G \
@@ -30,29 +30,29 @@ sudo mct-syslogger init --user appuser \
 mct-syslogger init --help
 ```
 
-`appuser` 必须是已有本机账户，root-only 部署可以指定 `--user root`。命令需要 root 及系统工具 GNU `getent`、`groupadd`、`usermod`、`systemctl`、`systemd-analyze`。账户和写入组由本机 files 管理，名称及 UID/GID 与当前 NSS 解析保持一致；默认 `files systemd` 可用。工具核验可枚举的主组、同 GID 别名组及附加成员，并确认目标账户的有效组身份；不可枚举外部身份源、自定义 userdb 或管理员额外服务组授权由部署方单独核验，初始化不管理这些授权域。
+名称目录固定由已有本机 `app` 账户持有，命令需要 root、`systemctl`、`systemd-analyze`。初始化解析 `app` 的实际 UID 和主 GID；官方静态 Release 使用本机账户文件解析身份，因此应先准备可从 `/etc/passwd` 读取的 `app` 账户。命令保留系统账户配置，日志读取权限继续由管理员管理。
 
-命令同时准备 `/var/lib/mct-syslogger` 的共享组写权限：root 与指定账户可写，其他本机账户只读。先停止旧版写入进程再迁移权限，完成后重新登录或重启业务服务刷新组身份；额外组成员、ACL 和异常受管对象会报错，交管理员先处理。
+命令将 `/var/lib/mct-syslogger` 及其项目目录、清单和锁迁移给 `app` 及其主 GID，目录为 `0755`、文件为 `0644`，其他普通账户只读。先停止旧版写入进程再迁移，配套 SDK 会让 root 新建的名称目录对象沿用这一属主；ACL 和异常受管对象会报错，交管理员先处理。systemd 配置仍由 root 管理，journal 文件继续由系统服务维护。
 
 ### 初始化过程输出
 
 `init` 按执行顺序向标准输出报告实际操作，最后保留完成摘要：
 
-- **命令**：执行程序的实际路径和独立参数，包括身份检查、组管理及 systemd 操作。命令在执行前记录，执行失败继续通过原有错误返回反馈；账户查询结果和配置正文不会作为过程日志倾倒。
+- **命令**：执行程序的实际路径和独立参数，涵盖 systemd 版本、单元检查和实例应用。命令在执行前记录，执行失败继续通过原有错误返回反馈；查询结果和配置正文不会作为过程日志倾倒。
 - **目录**：区分创建与复用，列出根目录、项目目录及配置目录的实际路径。
 - **权限**：在属主／属组、权限分别设置成功后记录对象路径、UID/GID 及 Unix 权限值。重复执行仍报告设置动作，不把相同值描述成新增变更。
 - **配置**：原子替换成功后区分创建与更新；只有旧受管文件实际删除后才报告清理，管理员文件明确报告保留。文件内容及稳定锁 inode 的迁移规则保持原样。
 - **systemd 结果**：保留 `add-wants` 返回的链接创建信息，检查通过后报告专用 socket 就绪；由 systemd 管理的运行目录和 journal 文件不假报为 `init` 直接创建。
 
-以下为已有目录、GID 为 986、systemd 248+ 时的节选示例，具体命令路径和对象取决于主机：
+以下为已有目录、`app` 的 UID/GID 均为 2200、systemd 248+ 时的节选示例，具体数值、命令路径和对象取决于主机：
 
 ```text
-[开始初始化] 运行账户="app"
+[开始初始化] 目录所有者="app"
 [执行命令] "/usr/bin/systemd-analyze" 参数=["--version"]
 [等级空间] namespace="mct-syslogger-debug" 持久化容量="1G"
 [复用目录] "/var/lib/mct-syslogger"
-[设置目录属主] "/var/lib/mct-syslogger" UID=0 GID=986
-[设置目录权限] "/var/lib/mct-syslogger" mode=2775
+[设置目录属主] "/var/lib/mct-syslogger" UID=2200 GID=2200
+[设置目录权限] "/var/lib/mct-syslogger" mode=0755
 [更新配置] "/etc/systemd/journald@mct-syslogger-debug.conf.d/60-mct-syslogger-init.conf" mode=0644（临时文件原子替换）
 [执行命令] "/usr/bin/systemctl" 参数=["restart" "systemd-journald@mct-syslogger-debug.service"]
 ```
@@ -137,7 +137,7 @@ CLI 使用 `journalctl --namespace='*'` 加所选组的精确 `_NAMESPACE` 条�
 
 先运行新 init 准备四个入口，再用新 SDK **重新编译、部署并重启所有业务程序**，最后使用新 CLI 核对八级日志分布。更新命令工具不会更新业务二进制中已嵌入的 Go module。旧空间保留期间额外占用磁盘，四组预算不包括旧数据；名称目录权限迁移仍需先停止旧写入进程。
 
-确认所有旧业务已退出、四组日志正常且旧历史无需保留后，由管理员手动执行下面的清理。**删除日志不可恢复；只处理精确的旧实例名称，不用 `mct-syslogger*` 通配删除。保留四个新空间、默认系统 journal、共享 `/var/lib/mct-syslogger` 及写入组。**
+确认所有旧业务已退出、四组日志正常且旧历史无需保留后，由管理员手动执行下面的清理。**删除日志不可恢复；只处理精确的旧实例名称，不用 `mct-syslogger*` 通配删除。保留四个新空间、默认系统 journal 及名称目录 `/var/lib/mct-syslogger`。**
 
 ### 1. 盘点旧实例的实际激活入口与配置
 

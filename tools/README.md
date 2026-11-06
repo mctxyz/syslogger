@@ -42,22 +42,21 @@ mct-syslogger -p example-project -i example-instance -c example-component -s=-2h
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash'
 ```
 
-[安装脚本](https://github.com/mctxyz/syslogger/blob/main/tools/install/install.sh) 自动识别 amd64／arm64，解析最新 Release 的固定 tag，下载对应压缩包并校验 `SHA256SUMS`。在安装写入前通过四个参数置于 `--help` 之前的只读解析检查，确认候选支持配套 init 契约；不支持时停止，保留原有安装。之后交互收集以下参数：
+[安装脚本](https://github.com/mctxyz/syslogger/blob/main/tools/install/install.sh) 自动识别 amd64／arm64，解析最新 Release 的固定 tag，下载对应压缩包并校验 `SHA256SUMS`。在安装写入前通过只读参数解析检查，确认候选支持四项容量及固定 `app` 所有者的配套 init 契约；不支持时停止，保留原有安装。主机须已有本机 `app` 账户，之后交互收集以下参数：
 
 | 参数 | 默认值与用途 |
 | --- | --- |
 | 安装前缀 | `/usr/local`；命令安装到 `bin/mct-syslogger`，使用说明、许可和部署文档安装到 `share/doc/mct-syslogger/` |
-| 程序运行账户 | 必填，使用已存在的账户；本地身份来源和目录组权限由 `init` 校验 |
 | debug 持久化容量 | `1G`，传给 `--journal-debug-max-use` |
 | info/notice 持久化容量 | `2G`，传给 `--journal-info-max-use` |
 | warning 持久化容量 | `1G`，传给 `--journal-warning-max-use` |
 | error 及以上持久化容量 | `1G`，传给 `--journal-error-max-use` |
 
-四项容量接受正整数字节或 `K/M/G/T/P/E` 单位。脚本显示版本、路径、四项容量及初始化影响，确认后安装并执行带运行账户和四容量参数的 `mct-syslogger init`。普通用户仅在系统写入及初始化时通过 `sudo` 提权，root 可直接运行；无需对整个下载管道使用 `sudo`。可先下载并审阅脚本，再使用 `bash install.sh`，或用 `bash install.sh --help` 查看说明。
+四项容量接受正整数字节或 `K/M/G/T/P/E` 单位。脚本显示版本、路径、固定所有者、四项容量及初始化影响，确认后安装并执行带四容量参数的 `mct-syslogger init`。普通用户仅在系统写入及初始化时通过 `sudo` 提权，root 可直接运行；无需对整个下载管道使用 `sudo`。可先下载并审阅脚本，再使用 `bash install.sh`，或用 `bash install.sh --help` 查看说明。
 
 需要 Bash、curl、GNU tar/coreutils、awk、getent、root 或 sudo，以及初始化所需的 Linux、systemd 245+ 和系统工具。交互从 `/dev/tty` 读取，支持管道安装；没有控制终端时明确失败。自定义安装前缀的 `bin/` 若未在 PATH 中，可使用安装后显示的绝对路径运行命令。
 
-首次迁移前停止旧版业务进程；初始化会应用目录权限和专用 journal 配置、重启专用实例，缩小容量可能清理旧归档。下载或校验失败、取消确认均不会执行系统安装或初始化；安装或初始化失败返回非零，已经完成的步骤保留。命令安装后若 `init` 报错，请修正原因后重新执行 `init`；成功后重新登录或重启业务服务刷新组身份。日志读取权限继续由管理员单独管理。
+首次迁移前停止旧版业务进程；初始化会迁移名称目录属主、应用权限和专用 journal 配置、重启专用实例，缩小容量可能清理旧归档。下载或校验失败、取消确认均不会执行系统安装或初始化；安装或初始化失败返回非零，已经完成的步骤保留。命令安装后若 `init` 报错，请修正原因后重新执行 `init`。日志读取权限继续由管理员单独管理。
 
 ### 手工下载安装
 
@@ -130,18 +129,18 @@ sudo usermod -aG systemd-journal username
 ## 初始化主机
 
 ```sh
-sudo mct-syslogger init --user appuser
-sudo mct-syslogger init --user appuser \
+sudo mct-syslogger init
+sudo mct-syslogger init \
   --journal-debug-max-use 1G --journal-info-max-use 2G \
   --journal-warning-max-use 1G --journal-error-max-use 1G
 mct-syslogger init --help
 ```
 
-`--user` 是已有本机程序运行账户，必须明确提供，root-only 部署可指定 root；初始化需要 root、Linux、systemd 245+，以及 GNU `getent`、`groupadd`、`usermod`、`systemctl`、`systemd-analyze`。独立子命令负责创建本机 `mct-syslogger` 组、追加该账户、准备名称目录和专用 journal。目录及项目子目录为 `2775`，JSON 和稳定锁为 `0664`，其他本机账户只读。检查按数值 GID 覆盖可枚举的主组、别名组及附加成员，默认 `files systemd` 可用；外部不可枚举身份源、自定义 userdb 及额外服务组授权由管理员核验。扩展／默认 ACL、越界链接或非受管对象会明确报错；已完成步骤不自动回滚，可修正后重复执行。
+初始化需要 root、Linux、systemd 245+、已有本机 `app` 账户，以及 `systemctl`、`systemd-analyze`。独立子命令将名称根目录、项目目录、JSON 和稳定锁迁移给 `app` 及其主 GID，目录为 `0755`，JSON 和锁为 `0644`，其他普通账户只读。配套 SDK 让 root 过渡进程新建的对象继承名称根目录的所有者。扩展／默认 ACL、越界链接或非受管对象会明确报错；已完成步骤不自动回滚，可修正后重复执行。
 
 四项参数分别控制 `mct-syslogger-debug/info/warning/error` 的持久化占用，notice 归 info，默认合计 5 GiB。配置开启原生透明压缩，查询自动解压，容量统计包含索引、元数据和压缩数据；`/run` 临时日志容量沿用系统现有配置。每次执行按本次参数应用配置并重启四个专用实例；省略某项使用其默认值，缩容可能触发对应空间清理旧归档，容量并非严格硬配额。SDK 负责路由，init 只检查 `MaxLevelStore` 不会过滤目标组日志，不生成该设置。
 
-首次迁移前停止旧版写入进程。初始化保留数据及锁 inode、管理员独立配置和默认系统 journal；管理员高优先级配置覆盖受管设置时报告真实来源并失败。245–247 使用受管命名空间主文件，248+ 使用受管 drop-in，版本切换清理安全可确认的旧工具配置。完成后重新登录或重启业务服务刷新组身份，日志读取权限仍单独管理。配置路径与应用步骤见[部署说明](../docs/journal.md)。
+首次迁移前停止旧版写入进程，并配套更新业务 SDK。初始化保留数据及锁 inode、管理员独立配置和默认系统 journal；管理员高优先级配置覆盖受管设置时报告真实来源并失败。245–247 使用受管命名空间主文件，248+ 使用受管 drop-in，版本切换清理安全可确认的旧工具配置。systemd 配置继续由 root 管理，日志读取权限仍单独管理。配置路径与应用步骤见[部署说明](../docs/journal.md)。
 
 ## 查看项目、实例与组件目录
 
@@ -188,7 +187,7 @@ mct-syslogger
 
 停止全部旧 SDK 写入者后，配套升级 SDK、CLI 和 JSON 消费方；旧 `log_count` 累计量不迁移，小时统计从升级后的接收活动重新开始，身份元数据保持。静默组件的旧小时数量在查询时归零，身份仍按一年活动期限保留。已有 `tools/bin/*` 二进制不会随源码自动更新。时区和时钟调整的边界见 [名称目录](../docs/catalog.md)。
 
-组件按最后一次成功接收时间独立保留一年，后台轮询不续期。`--list` 只读过滤过期组件，过滤后没有组件的实例也不显示；SDK 每 10 分钟执行物理清理，并额外保留一个同步周期，让过期前已接收的活动继续合并历史计数，CLI 显示期限仍为一年。全部应用退出后暂停物理清理，后续运行再处理。名称目录可用于查询未过期的历史身份，实际日志仍按 journal 留存范围查询。名称目录按初始化后的共享组权限维护；缺失或不可写时，SDK 保留失败增量并重试，仅内置管理器健康降级，日志、业务组件及指标出口继续独立工作。目录历史数据和旧目录由部署方自行处理。
+组件按最后一次成功接收时间独立保留一年，后台轮询不续期。`--list` 只读过滤过期组件，过滤后没有组件的实例也不显示；SDK 每 10 分钟执行物理清理，并额外保留一个同步周期，让过期前已接收的活动继续合并历史计数，CLI 显示期限仍为一年。全部应用退出后暂停物理清理，后续运行再处理。名称目录可用于查询未过期的历史身份，实际日志仍按 journal 留存范围查询。名称目录按初始化后的固定所有者权限维护；缺失或不可写时，SDK 保留失败增量并重试，仅内置管理器健康降级，日志、业务组件及指标出口继续独立工作。目录历史数据和旧目录由部署方自行处理。
 
 ## 查询示例
 

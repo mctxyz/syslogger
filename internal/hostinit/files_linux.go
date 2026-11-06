@@ -63,32 +63,28 @@ func inspect(file *os.File, directory bool) (unix.Stat_t, error) {
 	return stat, nil
 }
 
-func (init *initializer) prepareCatalog(path string, gid int) error {
+func (init *initializer) prepareCatalog(path string, uid, gid int) error {
 	root, err := init.openDirectory(path, true, catalog.DirectoryMode)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	return init.migrateDirectory(root, gid, true)
+	return init.migrateDirectory(root, uid, gid, true)
 }
 
 // migrateDirectory 保留文件内容及锁 inode，先收紧目录再按 fd 迁移受管子对象。
-func (init *initializer) migrateDirectory(directory *os.File, gid int, root bool) error {
+func (init *initializer) migrateDirectory(directory *os.File, uid, gid int, root bool) error {
 	if _, err := inspect(directory, true); err != nil {
 		return err
 	}
-	if err := directory.Chown(os.Geteuid(), gid); err != nil {
+	if err := directory.Chown(uid, gid); err != nil {
 		return err
 	}
-	init.logger.Printf("[设置目录属主] %q UID=%d GID=%d", directory.Name(), os.Geteuid(), gid)
+	init.logger.Printf("[设置目录属主] %q UID=%d GID=%d", directory.Name(), uid, gid)
 	if err := directory.Chmod(catalog.DirectoryMode); err != nil {
 		return err
 	}
-	mode := uint32(catalog.DirectoryMode.Perm())
-	if catalog.DirectoryMode&os.ModeSetgid != 0 {
-		mode |= unix.S_ISGID
-	}
-	init.logger.Printf("[设置目录权限] %q mode=%04o", directory.Name(), mode)
+	init.logger.Printf("[设置目录权限] %q mode=%04o", directory.Name(), catalog.DirectoryMode.Perm())
 	names, err := directory.Readdirnames(-1)
 	if err != nil {
 		return err
@@ -113,13 +109,13 @@ func (init *initializer) migrateDirectory(directory *os.File, gid int, root bool
 		file := os.NewFile(uintptr(fd), filepath.Join(directory.Name(), name))
 		if root {
 			init.logger.Printf("[复用目录] %q", file.Name())
-			err = init.migrateDirectory(file, gid, false)
+			err = init.migrateDirectory(file, uid, gid, false)
 		} else {
 			_, err = inspect(file, false)
 			if err == nil {
-				err = file.Chown(os.Geteuid(), gid)
+				err = file.Chown(uid, gid)
 				if err == nil {
-					init.logger.Printf("[设置文件属主] %q UID=%d GID=%d", file.Name(), os.Geteuid(), gid)
+					init.logger.Printf("[设置文件属主] %q UID=%d GID=%d", file.Name(), uid, gid)
 				}
 			}
 			if err == nil {

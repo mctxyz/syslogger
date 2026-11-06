@@ -22,7 +22,7 @@ func (s Store) Merge(delta Instance, now time.Time) error {
 		return err
 	}
 	path := s.Path(delta.Project, delta.InstanceID)
-	lock, err := lockProject(filepath.Dir(path))
+	lock, err := s.lockProject(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (s Store) Prune(now time.Time) error {
 }
 
 func (s Store) pruneProject(directory string, now time.Time) error {
-	lock, err := lockProject(directory)
+	lock, err := s.lockProject(directory)
 	if err != nil {
 		return err
 	}

@@ -29,6 +29,9 @@ func (s Store) write(instance Instance) error {
 	if _, err := file.Write(data); err != nil {
 		return err
 	}
+	if err := s.inheritOwner(file); err != nil {
+		return err
+	}
 	if err := file.Chmod(FileMode); err != nil {
 		return err
 	}
@@ -51,18 +54,26 @@ func checkDirectory(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("名称目录 %s 不是普通目录", path)
 	}
-	// setgid 是跨运行账户继续维护的前提，权限漂移交给管理员初始化修复。
+	// 根目录由管理员初始化为固定账户持有，权限漂移交给初始化命令修复。
 	if runtime.GOOS != "windows" && info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != DirectoryMode {
-		return fmt.Errorf("名称目录 %s 需要 2775 权限及共享组继承，请运行 mct-syslogger init: %w", path, os.ErrPermission)
+		return fmt.Errorf("名称目录 %s 需要 %04o 权限及 %s 所有者，请运行 mct-syslogger init: %w", path, DirectoryMode, User, os.ErrPermission)
 	}
 	return nil
 }
 
-// sharedDirectory 只为当前进程新建的项目目录设置权限，复用既有目录时保留所有权。
-func sharedDirectory(path string) error {
+// projectDirectory 为新项目继承初始化根目录的所有者，既有目录继续由 init 迁移。
+func (s Store) projectDirectory(path string) error {
 	err := os.Mkdir(path, DirectoryMode)
 	if err == nil {
-		return os.Chmod(path, DirectoryMode)
+		directory, err := openProjectDirectory(path)
+		if err != nil {
+			return err
+		}
+		defer directory.Close()
+		if err := s.inheritOwner(directory); err != nil {
+			return err
+		}
+		return directory.Chmod(DirectoryMode)
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return err

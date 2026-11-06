@@ -13,15 +13,15 @@ import (
 )
 
 func TestInitOptionsStaySeparate(t *testing.T) {
-	opts, err := parseInitOptions([]string{"--user", "appuser"}, io.Discard)
-	if err != nil || opts.User != "appuser" || opts.JournalMaxUse != [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"} {
+	opts, err := parseInitOptions(nil, io.Discard)
+	if err != nil || opts.JournalMaxUse != [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"} {
 		t.Fatalf("初始化默认参数错误: %+v %v", opts, err)
 	}
-	opts, err = parseInitOptions([]string{"--user", "appuser", "--journal-info-max-use", "10G"}, io.Discard)
+	opts, err = parseInitOptions([]string{"--journal-info-max-use", "10G"}, io.Discard)
 	if err != nil || opts.JournalMaxUse != [journalwire.GroupCount]string{"1G", "10G", "1G", "1G"} {
 		t.Fatalf("容量参数未生效: %+v %v", opts, err)
 	}
-	for _, args := range [][]string{{}, {"--user", "app", "--list"}, {"--user", "app", "--project", "demo"}, {"--user", "app", "--journal-debug-max-use", "0"}, {"--user", "app", "--journal-max-use", "5G"}, {"--user", "app", "positional"}} {
+	for _, args := range [][]string{{"--user", "app"}, {"--list"}, {"--project", "demo"}, {"--journal-debug-max-use", "0"}, {"--journal-max-use", "5G"}, {"positional"}} {
 		if _, err := parseInitOptions(args, io.Discard); err == nil {
 			t.Fatalf("初始化接受了无效参数: %v", args)
 		}
