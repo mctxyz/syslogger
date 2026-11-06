@@ -135,7 +135,7 @@ func TestSyncBypassesBlockedFIFO(t *testing.T) {
 	if q.pending.Load() != 2 || len(q.entries) != 1 {
 		t.Fatal("同步发送消费或等待了普通积压")
 	}
-	if activity := q.TakeActivity(); activity.Count != 3 {
+	if activity := q.TakeActivity(); activityCount(activity) != 3 {
 		t.Fatalf("异步与同步接收量没有共用同一活动来源: %+v", activity)
 	}
 }
@@ -227,7 +227,7 @@ func TestConcurrentSyncAdmissionAndClose(t *testing.T) {
 	close(start)
 	callers.Wait()
 	rejected, failed := q.Counts()
-	if activity := q.TakeActivity(); rejected+activity.Count != count || failed != activity.Count || q.pending.Load() != 0 {
+	if activity := q.TakeActivity(); rejected+activityCount(activity) != count || failed != activityCount(activity) || q.pending.Load() != 0 {
 		t.Fatalf("关闭竞争丢失接收、失败或拒收: rejected=%d failed=%d activity=%+v", rejected, failed, activity)
 	}
 }

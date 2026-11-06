@@ -91,7 +91,8 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     mct-syslogger --list -p example-project
   查看某项目某实例下的组件：
     mct-syslogger --list -p example-project -i example-instance
-  组件行的时间和累计数表示 SDK 接收活动，不是 journal 当前留存条数。
+  组件行先显示最后接收时间，再显示当前小时及前两个小时的各小时接收量。
+  数量表示 SDK 接收活动，不是 journal 当前留存条数。
 
 2. 用找到的名称查日志
   查看该组件近 1 小时内最新 100 条匹配日志：
@@ -159,6 +160,8 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   先读取机器可读目录，取得准确的名称：
     mct-syslogger --list --json
   目录是 JSON 数组：每项的 project、instance_id 对应 -p、-i，components[].name 对应 -c。
+  组件的 log_counts 固定为三个小时项，各项用 start_time（UTC）和 count 表示起点与数量。
+  相同 start_time 表示同一时段；新的起点是新的计数段，旧累计值不回填。
   再指定身份、时间和数量查询；输出为 NDJSON，每行一个 JSON 对象：
     mct-syslogger -p example-project -i example-instance -c example-component -s=-2h -n 200 --json
   日志字段：timestamp、level、project、instance_id、component、message，以及可选 fields。

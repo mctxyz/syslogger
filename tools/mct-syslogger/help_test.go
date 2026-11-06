@@ -104,7 +104,7 @@ func TestHelpExamples(t *testing.T) {
 			Name:         "example-component",
 			CreatedAt:    at,
 			LastActiveAt: at,
-			LogCount:     1,
+			LogCounts:    catalogCounts(at, 1),
 		}},
 	}
 	if err := store.Merge(instance, at); err != nil {

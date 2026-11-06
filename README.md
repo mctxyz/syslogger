@@ -73,7 +73,7 @@ mct-syslogger -p myapp -i main -s now -f
 | --- | --- |
 | [SDK 接入](docs/sdk.md) | 身份、注册、SafeNew 配置纠正、Close 生命周期 |
 | [日志发送](docs/logging.md) | 日志格式、协议、队列、失败处理、同步日志 |
-| [名称目录](docs/catalog.md) | 清单结构、权限、累计量、保留和清理 |
+| [名称目录](docs/catalog.md) | 清单结构、权限、每小时接收量、保留和清理 |
 | [健康与指标](docs/metrics.md) | 状态、队满降级、共享 Registry、HTTP 与文件出口 |
 | [主机部署](docs/journal.md) | init、专用 journal、容量、权限和迁移 |
 | [命令工具](tools/README.md) | 安装、名称发现、查询参数、性能诊断、CI 发布 |

@@ -13,7 +13,7 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-// 目录中的组件时间、累计信息和描述统一使用默认前景色的弱化亮度。
+// 目录中的组件时间、小时计数和描述统一使用默认前景色的弱化亮度。
 const colourCatalogDetails = "\x1b[2m"
 
 // showCatalog 读取名称目录并过滤一年未活跃组件，身份筛选与展示独立于 journal。
@@ -46,6 +46,9 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 				continue
 			}
 			instance.Components = components
+		}
+		for index := range instance.Components {
+			instance.Components[index].LogCounts = instance.Components[index].LogCounts.Recent(now)
 		}
 		selected = append(selected, instance)
 	}
@@ -95,8 +98,14 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 			name := escaped(component.Name)
 			padding := strings.Repeat(" ", nameWidth-uniseg.StringWidth(name)+2)
 			timestamp := component.LastActiveAt.Local().Format("2006-01-02 15:04:05")
-			// SetUint64 直接保留完整无符号整数，千位分组过程不经过有符号或浮点转换。
-			count := "累计: " + humanize.BigComma(new(big.Int).SetUint64(component.LogCount))
+			hours := make([]string, 0, len(component.LogCounts))
+			for _, bucket := range component.LogCounts {
+				// 起点包含日期和时区偏移，跨日及夏令时重复小时仍可分别识别。
+				start := bucket.StartTime.Local().Format("01-02 15:04 -0700")
+				count := humanize.BigComma(new(big.Int).SetUint64(bucket.Count))
+				hours = append(hours, start+"="+count)
+			}
+			count := "每小时: " + strings.Join(hours, " | ")
 			if opts.colour {
 				name = colourText(name, colourComponent)
 				timestamp = colourText(timestamp, colourCatalogDetails)

@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+func activityCount(activity Activity) uint64 {
+	var count uint64
+	for _, bucket := range activity.LogCounts {
+		count += bucket.Count
+	}
+	return count
+}
+
 func TestActivityCountsOnlyAcceptedEntriesAndRestoresWindow(t *testing.T) {
 	wake := make(chan struct{}, 1)
 	q := &Queue{entries: make(chan *Entry, 2), activityWake: wake}
@@ -17,19 +25,23 @@ func TestActivityCountsOnlyAcceptedEntriesAndRestoresWindow(t *testing.T) {
 		t.Fatal("未形成预期入队与拒收")
 	}
 	first := q.TakeActivity()
-	if first.Count != 2 || first.FirstAt.IsZero() || first.LastAt.Before(first.FirstAt) || len(wake) != 1 {
+	if activityCount(first) != 2 || first.FirstAt.IsZero() || first.LastAt.Before(first.FirstAt) || len(wake) != 1 {
 		t.Fatalf("入队统计或首次通知不符: %+v", first)
 	}
+	<-wake
 	<-q.entries
 	if err := q.Enqueue(entry); err != nil {
 		t.Fatal(err)
 	}
+	if len(wake) != 0 {
+		t.Fatal("取走增量后重复发送了首次活动通知")
+	}
 	q.RestoreActivity(first)
 	combined := q.TakeActivity()
-	if combined.Count != 3 || !combined.FirstAt.Equal(first.FirstAt) || combined.LastAt.Before(first.LastAt) {
+	if activityCount(combined) != 3 || !combined.FirstAt.Equal(first.FirstAt) || combined.LastAt.Before(first.LastAt) {
 		t.Fatalf("写入期间新增活动与失败窗口合并不符: %+v", combined)
 	}
-	if empty := q.TakeActivity(); !empty.FirstAt.IsZero() || empty.Count != 0 {
+	if empty := q.TakeActivity(); !empty.FirstAt.IsZero() || activityCount(empty) != 0 {
 		t.Fatalf("已取走窗口被重复统计: %+v", empty)
 	}
 	q.closing = true
@@ -40,12 +52,12 @@ func TestActivityCountsOnlyAcceptedEntriesAndRestoresWindow(t *testing.T) {
 
 func TestActivityOverflowStillHasActivity(t *testing.T) {
 	q := &Queue{entries: make(chan *Entry, 1), activityWake: make(chan struct{}, 1)}
-	q.accepted.Store(^uint64(0))
+	q.logCounts.Add(time.Now(), ^uint64(0))
 	if err := q.Enqueue(&Entry{}); err != nil {
 		t.Fatal(err)
 	}
 	activity := q.TakeActivity()
-	if activity.Count != 0 || activity.FirstAt.IsZero() || activity.LastAt.IsZero() {
+	if activityCount(activity) != 0 || activity.FirstAt.IsZero() || activity.LastAt.IsZero() {
 		t.Fatalf("回绕后的零计数被当成无活动: %+v", activity)
 	}
 }
@@ -71,10 +83,10 @@ func TestActivityConcurrentEnqueueAndSnapshots(t *testing.T) {
 	}()
 	var total uint64
 	for {
-		total += q.TakeActivity().Count
+		total += activityCount(q.TakeActivity())
 		select {
 		case <-done:
-			total += q.TakeActivity().Count
+			total += activityCount(q.TakeActivity())
 			if total != 1000 {
 				t.Fatalf("并发快照丢失入队量: %d", total)
 			}
@@ -101,10 +113,24 @@ func TestActivitySurvivesSendFailure(t *testing.T) {
 	if err := q.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	if activity := q.TakeActivity(); activity.Count != 1 {
+	if activity := q.TakeActivity(); activityCount(activity) != 1 {
 		t.Fatalf("发送失败回减了入队量: %+v", activity)
 	}
 	if _, failed := q.Counts(); failed != 1 {
 		t.Fatal("原有发送失败指标发生变化")
+	}
+}
+
+func TestRestoreActivityKeepsRecentHoursAndOriginalActivity(t *testing.T) {
+	now := time.Now().UTC()
+	q := &Queue{firstAccepted: now, lastAccepted: now}
+	q.logCounts.Add(now, 3)
+	old := now.Add(-4 * time.Hour)
+	failed := Activity{FirstAt: old, LastAt: old}
+	failed.LogCounts.Add(old, 100)
+	q.RestoreActivity(failed)
+	activity := q.TakeActivity()
+	if activityCount(activity) != 3 || !activity.FirstAt.Equal(old) || !activity.LastAt.Equal(now) {
+		t.Fatalf("失败恢复保留了过期数量或丢失原始活动：%+v", activity)
 	}
 }

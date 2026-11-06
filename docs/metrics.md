@@ -24,7 +24,7 @@ rpc.Healthy()
 runtime.Info("进程已启动", nil)
 ```
 
-该选项只控制导出，注册后固定：全局 `Config.StateEnabled` 仍控制健康记录维护，`DegradeOnQueueFull` 仍按原规则更新有效状态；显式开启导出但状态维护关闭时，健康样本保持初始 Unknown/0。两个日志 Counter 始终按原日志路径维护并参与采集，日志发送、同步日志及名称目录累计量不受此选项影响。管理器内置 `syslogger_manager` 的健康指标继续遵守原有全局状态配置。
+该选项只控制导出，注册后固定：全局 `Config.StateEnabled` 仍控制健康记录维护，`DegradeOnQueueFull` 仍按原规则更新有效状态；显式开启导出但状态维护关闭时，健康样本保持初始 Unknown/0。两个日志 Counter 始终按原日志路径维护并参与采集，日志发送、同步日志及名称目录小时接收量不受此选项影响。管理器内置 `syslogger_manager` 的健康指标继续遵守原有全局状态配置。
 
 HTTP、文件和外部共享 Registry 使用同一个 Collector，按组件采用相同的导出选择。升级前已依赖组件健康指标的调用方，需要为对应注册补充 `EnableHealthMetrics: true`；未启用的组件没有这两项样本，而不是输出零值。
 

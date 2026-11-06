@@ -1,12 +1,16 @@
 package logging
 
-import "time"
+import (
+	"time"
 
-// Activity 是一个尚未持久化的成功接收窗口，数量按 uint64 自然回绕。
+	"github.com/mctxyz/syslogger/internal/hourly"
+)
+
+// Activity 保存尚未持久化的小时增量及独立活动时间，数量归零不改变接收事实。
 type Activity struct {
-	Count   uint64
-	FirstAt time.Time
-	LastAt  time.Time
+	LogCounts hourly.Window
+	FirstAt   time.Time
+	LastAt    time.Time
 }
 
 // recordActivity 在队列锁内累计已接收的异步入队或同步发送活动。
@@ -15,7 +19,7 @@ func (q *Queue) recordActivity() {
 		return
 	}
 	at := time.Now().UTC()
-	q.accepted.Add(1)
+	q.logCounts.Add(at, 1)
 	if q.firstAccepted.IsZero() {
 		q.firstAccepted = at
 	}
@@ -33,10 +37,11 @@ func (q *Queue) TakeActivity() Activity {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	activity := Activity{
-		Count:   q.accepted.Swap(0),
-		FirstAt: q.firstAccepted,
-		LastAt:  q.lastAccepted,
+		LogCounts: q.logCounts,
+		FirstAt:   q.firstAccepted,
+		LastAt:    q.lastAccepted,
 	}
+	q.logCounts = hourly.Window{}
 	q.firstAccepted = time.Time{}
 	return activity
 }
@@ -45,7 +50,7 @@ func (q *Queue) TakeActivity() Activity {
 func (q *Queue) RestoreActivity(activity Activity) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.accepted.Add(activity.Count)
+	q.logCounts.Merge(activity.LogCounts, time.Now())
 	if q.firstAccepted.IsZero() || activity.FirstAt.Before(q.firstAccepted) {
 		q.firstAccepted = activity.FirstAt
 	}

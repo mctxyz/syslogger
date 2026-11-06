@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/mctxyz/syslogger/internal/hourly"
 )
 
 // Root 是 SDK 和日志工具共同使用的固定目录，与进程 TMPDIR 无关。
@@ -34,11 +36,11 @@ type Component struct {
 	CreatedAt   time.Time `json:"created_at"`
 	// LastActiveAt 来自实际成功接收时刻，后台检查本身不更新它。
 	LastActiveAt time.Time `json:"last_active_at"`
-	// LogCount 保存累计接收量，后续发送结果不回减，溢出自然回绕。
-	LogCount uint64 `json:"log_count"`
+	// LogCounts 按小时起点保存最近三个自然小时的 SDK 接收量，发送结果不回减。
+	LogCounts hourly.Window `json:"log_counts"`
 }
 
-// Instance 保存实例的历史日志名称；每个组件维护自己的活动时间与累计接收量。
+// Instance 保存实例的历史日志名称；每个组件维护独立活动时间和三小时接收量。
 type Instance struct {
 	Project             string      `json:"project"`
 	InstanceID          string      `json:"instance_id"`

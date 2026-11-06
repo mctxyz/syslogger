@@ -83,7 +83,7 @@ SOFTWARE.
 
 ## go-humanize v1.1.0：MIT License
 
-目录展示通过 `BigComma` 将完整累计接收量格式化为带千位分隔的整数。来源：<https://github.com/dustin/go-humanize/tree/v1.1.0>。
+目录展示通过 `BigComma` 将每小时接收量格式化为带千位分隔的完整整数。来源：<https://github.com/dustin/go-humanize/tree/v1.1.0>。
 
 Copyright (c) 2005-2008  Dustin Sallings <dustin@spy.net>
 

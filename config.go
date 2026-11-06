@@ -27,7 +27,7 @@ type Config struct {
 	InstanceID string
 	// InstanceDescription 描述实例用途，供本机日志名称目录展示。
 	InstanceDescription string
-	// CatalogEnabled 将成功接收的日志身份与累计量发布到 /var/lib/mct-syslogger，零值关闭。
+	// CatalogEnabled 将日志身份与最近三个自然小时的接收量发布到 /var/lib/mct-syslogger，零值关闭。
 	CatalogEnabled bool
 	// SyslogSocketPath 指定传统 syslog Unix socket，由接入方保证隔离；空值使用 Linux 的 mct-syslogger journal 命名空间。
 	SyslogSocketPath string

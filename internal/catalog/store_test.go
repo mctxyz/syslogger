@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mctxyz/syslogger/internal/hourly"
 )
 
 func TestFixedRoot(t *testing.T) {
@@ -65,9 +67,23 @@ func activeFixture(instance Instance, at time.Time) Instance {
 	for index := range instance.Components {
 		instance.Components[index].CreatedAt = at
 		instance.Components[index].LastActiveAt = at
-		instance.Components[index].LogCount = 1
+		instance.Components[index].LogCounts = fixtureCounts(at, 1)
 	}
 	return instance
+}
+
+func fixtureCounts(at time.Time, count uint64) hourly.Window {
+	var window hourly.Window
+	window.Add(at, count)
+	return window
+}
+
+func componentCount(component Component) uint64 {
+	var count uint64
+	for _, bucket := range component.LogCounts {
+		count += bucket.Count
+	}
+	return count
 }
 
 func TestMergeReadAndAccumulation(t *testing.T) {
@@ -104,7 +120,7 @@ func TestMergeReadAndAccumulation(t *testing.T) {
 	instance.InstanceDescription = update.InstanceDescription
 	instance.Components[0].Description = "最新说明"
 	instance.Components[0].LastActiveAt = update.CreatedAt
-	instance.Components[0].LogCount = 2
+	instance.Components[0].LogCounts.Add(update.CreatedAt, 1)
 	got, err := store.Read()
 	if err != nil || !reflect.DeepEqual(got, []Instance{instance}) {
 		t.Fatalf("重启合并未保留创建时间或累计量: got=%+v err=%v", got, err)
@@ -173,7 +189,7 @@ func TestConcurrentPublicationAndRead(t *testing.T) {
 		if instance.InstanceID == "instance-a" {
 			want = 60
 		}
-		if instance.Components[0].LogCount != want {
+		if componentCount(instance.Components[0]) != want {
 			t.Fatalf("同身份并发合并丢失累计量: %+v", instance)
 		}
 	}
@@ -303,7 +319,7 @@ func TestPruneIndividualComponentsAndRevival(t *testing.T) {
 		t.Fatal(err)
 	}
 	instances, err = store.Read()
-	if err != nil || len(instances) != 2 || !instances[0].CreatedAt.Equal(now) || instances[0].Components[0].LogCount != 1 {
+	if err != nil || len(instances) != 2 || !instances[0].CreatedAt.Equal(now) || componentCount(instances[0].Components[0]) != 1 {
 		t.Fatalf("清理后再次活动未建立新记录: %+v, %v", instances, err)
 	}
 }
@@ -312,16 +328,16 @@ func TestMergeOverflowAndExpiryWithoutPrune(t *testing.T) {
 	store := Store{Root: preparedRoot(t)}
 	now := time.Now().UTC()
 	instance := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, now)
-	instance.Components[0].LogCount = ^uint64(0)
+	instance.Components[0].LogCounts = fixtureCounts(now, ^uint64(0))
 	if err := store.Merge(instance, now); err != nil {
 		t.Fatal(err)
 	}
-	instance.Components[0].LogCount = 1
+	instance.Components[0].LogCounts = fixtureCounts(now, 1)
 	if err := store.Merge(instance, now); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.Read()
-	if err != nil || got[0].Components[0].LogCount != 0 || len(got[0].Active(now).Components) != 1 {
+	if err != nil || componentCount(got[0].Components[0]) != 0 || len(got[0].Active(now).Components) != 1 {
 		t.Fatalf("溢出未自然回零或零计数组件被误判为空: %+v, %v", got, err)
 	}
 	later := now.AddDate(1, 0, 1)
@@ -330,7 +346,7 @@ func TestMergeOverflowAndExpiryWithoutPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = store.Read()
-	if err != nil || got[0].Components[0].LogCount != 1 || !got[0].CreatedAt.Equal(later) {
+	if err != nil || componentCount(got[0].Components[0]) != 1 || !got[0].CreatedAt.Equal(later) {
 		t.Fatalf("合并时未重建过期记录: %+v, %v", got, err)
 	}
 }
@@ -362,7 +378,7 @@ func TestMergeAcrossProcesses(t *testing.T) {
 	}
 	workers.Wait()
 	instances, err := (Store{Root: root}).Read()
-	if err != nil || len(instances) != 1 || instances[0].Components[0].LogCount != 48 {
+	if err != nil || len(instances) != 1 || componentCount(instances[0].Components[0]) != 48 {
 		t.Fatalf("多进程累计增量丢失: %+v, %v", instances, err)
 	}
 }
@@ -382,7 +398,7 @@ func TestMergeActivityAcrossExpiry(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			store := Store{Root: preparedRoot(t)}
 			initial := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, createdAt)
-			initial.Components[0].LogCount = 100
+			initial.Components[0].LogCounts = fixtureCounts(createdAt, 100)
 			if err := store.Merge(initial, createdAt); err != nil {
 				t.Fatal(err)
 			}
@@ -412,8 +428,8 @@ func TestMergeActivityAcrossExpiry(t *testing.T) {
 				t.Fatalf("跨过期点活动丢失记录: %+v, %v", instances, err)
 			}
 			component := instances[0].Components[0]
-			if component.Name != "rpc" || component.LogCount != 101 {
-				t.Fatalf("过期前已入队的活动重置了历史数量: %+v", component)
+			if component.Name != "rpc" || componentCount(component) != 1 {
+				t.Fatalf("近期接收量混入过期小时数量或丢失组件: %+v", component)
 			}
 			if !component.CreatedAt.Equal(createdAt) || !instances[0].CreatedAt.Equal(createdAt) || !component.LastActiveAt.Equal(activityAt) {
 				t.Fatalf("跨过期点同步改写了生命周期: %+v", instances[0])
@@ -428,7 +444,7 @@ func TestPhysicalExpiryGracePreservesRecordUntilRemoval(t *testing.T) {
 	for _, resume := range []bool{false, true} {
 		store := Store{Root: preparedRoot(t)}
 		initial := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, createdAt)
-		initial.Components[0].LogCount = 100
+		initial.Components[0].LogCounts = fixtureCounts(createdAt, 100)
 		if err := store.Merge(initial, createdAt); err != nil {
 			t.Fatal(err)
 		}
@@ -446,7 +462,7 @@ func TestPhysicalExpiryGracePreservesRecordUntilRemoval(t *testing.T) {
 				t.Fatal(err)
 			}
 			instances, err = store.Read()
-			if err != nil || instances[0].Components[0].LogCount != 101 || !instances[0].Components[0].CreatedAt.Equal(createdAt) {
+			if err != nil || componentCount(instances[0].Components[0]) != 1 || !instances[0].Components[0].CreatedAt.Equal(createdAt) {
 				t.Fatalf("宽限期间提前重置了历史记录: %+v, %v", instances, err)
 			}
 		} else {
@@ -476,7 +492,7 @@ func TestMergeSameComponentOutOfOrderAcrossExpiry(t *testing.T) {
 		t.Run(order.name, func(t *testing.T) {
 			store := Store{Root: preparedRoot(t)}
 			initial := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, createdAt)
-			initial.Components[0].LogCount = 100
+			initial.Components[0].LogCounts = fixtureCounts(createdAt, 100)
 			if err := store.Merge(initial, createdAt); err != nil {
 				t.Fatal(err)
 			}
@@ -494,12 +510,98 @@ func TestMergeSameComponentOutOfOrderAcrossExpiry(t *testing.T) {
 				t.Fatalf("逆序合并丢失组件: %+v, %v", instances, err)
 			}
 			component := instances[0].Components[0]
-			if component.LogCount != 102 || !component.CreatedAt.Equal(createdAt) || !component.LastActiveAt.Equal(late) {
-				t.Fatalf("同组件批次的落盘顺序改变了历史累计: %+v", component)
+			if componentCount(component) != 2 || !component.CreatedAt.Equal(createdAt) || !component.LastActiveAt.Equal(late) {
+				t.Fatalf("同组件批次的落盘顺序改变了小时数量或活动时间: %+v", component)
 			}
 			if !instances[0].CreatedAt.Equal(createdAt) {
 				t.Fatalf("逆序合并重置了实例创建时间: %+v", instances[0])
 			}
 		})
+	}
+}
+
+func TestHourlyMergeWithStaleCallerTime(t *testing.T) {
+	store := Store{Root: preparedRoot(t)}
+	base := time.Date(2026, 11, 6, 13, 0, 0, 0, time.Local).UTC()
+	initial := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, base.Add(-time.Minute))
+	initial.Components[0].LogCounts = fixtureCounts(base.Add(-time.Minute), 5)
+	if err := store.Merge(initial, base.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	newer := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}, {Name: "silent"}}}, base)
+	newer.Components[0].LogCounts = fixtureCounts(base, 7)
+	newer.Components[1].LogCounts = fixtureCounts(base, 4)
+	if err := store.Merge(newer, base); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟旧调用在整点前采样时间，整点后才取得项目锁；不得删除另一进程的新小时。
+	older := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, base.Add(-10*time.Minute))
+	older.Components[0].LogCounts = fixtureCounts(base.Add(-10*time.Minute), 3)
+	if err := store.Merge(older, base.Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	instances, err := store.Read()
+	if err != nil || len(instances) != 1 || len(instances[0].Components) != 2 {
+		t.Fatalf("跨整点合并丢失组件：%+v, %v", instances, err)
+	}
+	components := instances[0].Components
+	if components[0].LogCounts[1].Count != 8 || components[0].LogCounts[2].Count != 7 || !components[0].LogCounts[2].StartTime.Equal(base) {
+		t.Fatalf("旧调用覆盖了已提交的新小时或未合并旧小时：%+v", components[0])
+	}
+	if componentCount(components[1]) != 4 || !components[1].LogCounts[2].StartTime.Equal(base) {
+		t.Fatalf("未参与增量的组件被旧调用回退：%+v", components[1])
+	}
+	next := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, base.Add(time.Hour))
+	next.Components[0].LogCounts = fixtureCounts(base.Add(time.Hour), 2)
+	if err := store.Merge(next, base.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	instances, err = store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := instances[0].Components[0].LogCounts
+	if got[0].Count != 8 || got[1].Count != 7 || got[2].Count != 2 || !got[0].StartTime.Equal(base.Add(-time.Hour)) {
+		t.Fatalf("下一整点未保留三个正确的小时：%+v", got)
+	}
+}
+
+func TestLegacyTotalIsNotMigratedToHourlyCounts(t *testing.T) {
+	store := Store{Root: preparedRoot(t)}
+	now := time.Now().UTC()
+	createdAt := now.Add(-24 * time.Hour)
+	path := store.Path("p", "i")
+	if err := sharedDirectory(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[string]any{
+		"project": "p", "instance_id": "i", "created_at": createdAt,
+		"components": []map[string]any{{
+			"name": "rpc", "description": "旧身份", "created_at": createdAt,
+			"last_active_at": createdAt, "log_count": uint64(987654321),
+		}},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, FileMode); err != nil {
+		t.Fatal(err)
+	}
+	delta := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, now)
+	if err := store.Merge(delta, now); err != nil {
+		t.Fatal(err)
+	}
+	instances, err := store.Read()
+	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 {
+		t.Fatalf("旧身份未正常延续：%+v, %v", instances, err)
+	}
+	component := instances[0].Components[0]
+	if !component.CreatedAt.Equal(createdAt) || componentCount(component) != 1 || !component.LogCounts[hourly.Hours-1].StartTime.Equal(hourly.Start(now)) {
+		t.Fatalf("小时统计错误继承了旧累计或重置了身份时间：%+v", component)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil || strings.Contains(string(data), `"log_count"`) || !strings.Contains(string(data), `"log_counts"`) {
+		t.Fatalf("新文件仍保留旧累计字段：%s, %v", data, err)
 	}
 }

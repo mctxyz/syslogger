@@ -79,8 +79,8 @@ func TestCloseInterruptsBackpressureAndReleasesQueue(t *testing.T) {
 	if !errors.Is(q.Enqueue(entry), ErrClosed) {
 		t.Fatal("关闭后继续接收")
 	}
-	if activity := q.TakeActivity(); activity.Count != accepted {
-		t.Fatalf("关闭放弃或关闭拒收改变了累计接收量: got=%d want=%d", activity.Count, accepted)
+	if activity := q.TakeActivity(); activityCount(activity) != accepted {
+		t.Fatalf("关闭放弃或关闭拒收改变了小时接收量: got=%d want=%d", activityCount(activity), accepted)
 	}
 }
 

@@ -28,6 +28,14 @@ func preparedCatalogRoot(t *testing.T) string {
 	return root
 }
 
+func catalogLogCount(component catalog.Component) uint64 {
+	var count uint64
+	for _, bucket := range component.LogCounts {
+		count += bucket.Count
+	}
+	return count
+}
+
 // catalogManager 在隔离目录中验证真实发布逻辑，固定系统路径留给平台上的运行验证。
 func catalogManager(t *testing.T, cfg Config, root string) *Manager {
 	t.Helper()
@@ -83,21 +91,21 @@ func TestCatalogRegistrationRestartAndClose(t *testing.T) {
 	first.components["obsolete"].Info("首次使用", nil)
 	waitUntil(t, func() bool {
 		instances, err := first.catalog.Read()
-		return err == nil && len(instances) == 1 && instances[0].Components[0].LogCount == 1
+		return err == nil && len(instances) == 1 && catalogLogCount(instances[0].Components[0]) == 1
 	})
 	first.components["obsolete"].Info("第二条", nil)
 	first.components["obsolete"].Info("第三条", nil)
 	// 独立缺省 socket 的发送结果不影响已经成功入队的数量。
 	_ = first.Close(context.Background())
 	instances, err := first.catalog.Read()
-	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || instances[0].Components[0].LogCount != 3 {
+	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || catalogLogCount(instances[0].Components[0]) != 3 {
 		t.Fatalf("关闭后目录未保留: %+v, %v", instances, err)
 	}
 	createdAt := instances[0].CreatedAt
 	cfg.InstanceDescription = "新实例说明"
 	second := catalogManager(t, cfg, root)
 	instances, err = second.catalog.Read()
-	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || instances[0].Components[0].LogCount != 3 {
+	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || catalogLogCount(instances[0].Components[0]) != 3 {
 		t.Fatalf("重新初始化改写了历史记录: %+v, %v", instances, err)
 	}
 	if _, err := second.Register(ComponentConfig{Name: "rpc", Description: "新区块获取"}); err != nil {
@@ -119,7 +127,7 @@ func TestCatalogRegistrationRestartAndClose(t *testing.T) {
 	if !instance.CreatedAt.Equal(createdAt) || instance.InstanceDescription != cfg.InstanceDescription {
 		t.Fatalf("重启后的创建时间或描述不符: %+v", instance)
 	}
-	if instance.Components[0].LogCount != 4 || instance.Components[1].LogCount != 1 {
+	if catalogLogCount(instance.Components[0]) != 4 || catalogLogCount(instance.Components[1]) != 1 {
 		t.Fatalf("重启累计或新增组件不符: %+v, %v", instances, err)
 	}
 }
@@ -149,7 +157,7 @@ func TestConcurrentCatalogRegistration(t *testing.T) {
 		t.Fatalf("并发发布遗漏组件: %+v, %v", instances, err)
 	}
 	for _, component := range instances[0].Components {
-		if component.Name == diagnostic.ComponentName || component.LogCount != 1 {
+		if component.Name == diagnostic.ComponentName || catalogLogCount(component) != 1 {
 			t.Fatalf("状态维护或未使用组件被列入目录: %+v", component)
 		}
 	}
@@ -186,7 +194,7 @@ func TestCatalogFailurePreservesBusinessRegistration(t *testing.T) {
 	}
 	m.publishCatalog()
 	instances, err := m.catalog.Read()
-	if err != nil || len(instances) != 1 || instances[0].Components[0].LogCount != 1 {
+	if err != nil || len(instances) != 1 || catalogLogCount(instances[0].Components[0]) != 1 {
 		t.Fatalf("写入失败后重试丢失或重复累计: %+v, %v", instances, err)
 	}
 	if currentRecord(t, m, diagnostic.ComponentName).State != int(StateHealthy) {
@@ -252,7 +260,7 @@ func TestCatalogPermissionFailureAndRecovery(t *testing.T) {
 		t.Fatal("修复权限后的实际发布没有恢复管理器")
 	}
 	instances, err := m.catalog.Read()
-	if err != nil || len(instances) != 1 || instances[0].Components[0].LogCount != 1 {
+	if err != nil || len(instances) != 1 || catalogLogCount(instances[0].Components[0]) != 1 {
 		t.Fatalf("权限恢复后累计增量不正确: %+v %v", instances, err)
 	}
 }
@@ -309,7 +317,7 @@ func TestCatalogConcurrentComponentCounts(t *testing.T) {
 		t.Fatalf("组件独立计数目录不符: %+v, %v", instances, err)
 	}
 	for _, component := range instances[0].Components {
-		if component.LogCount != 800 {
+		if catalogLogCount(component) != 800 {
 			t.Fatalf("组件并发数量不符: %+v", component)
 		}
 	}
@@ -327,7 +335,7 @@ func TestCatalogPollingPreservesActualActivity(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	m.publishCatalog()
 	after, err := m.catalog.Read()
-	if err != nil || !before[0].Components[0].LastActiveAt.Equal(after[0].Components[0].LastActiveAt) || after[0].Components[0].LogCount != 1 {
+	if err != nil || !before[0].Components[0].LastActiveAt.Equal(after[0].Components[0].LastActiveAt) || catalogLogCount(after[0].Components[0]) != 1 {
 		t.Fatalf("轮询伪造了活动或重复累计: %+v, %v", after, err)
 	}
 }
@@ -345,7 +353,7 @@ func TestCatalogEncodingAndCloseRejectionsDoNotCount(t *testing.T) {
 	_ = m.Close(context.Background())
 	c.Info("关闭拒收", nil)
 	instances, err = m.catalog.Read()
-	if err != nil || len(instances) != 1 || instances[0].Components[0].LogCount != 1 {
+	if err != nil || len(instances) != 1 || catalogLogCount(instances[0].Components[0]) != 1 {
 		t.Fatalf("拒收计入了成功入队数量: %+v, %v", instances, err)
 	}
 }
@@ -385,7 +393,7 @@ func TestCatalogStartupDiagnosticActivity(t *testing.T) {
 		t.Fatalf("实际初始化诊断没有建立目录: %+v, %v", instances, err)
 	}
 	component := instances[0].Components[0]
-	if component.Name != diagnostic.ComponentName || component.LogCount != 1 {
+	if component.Name != diagnostic.ComponentName || catalogLogCount(component) != 1 {
 		t.Fatalf("初始化诊断未按入队独立累计: %+v", component)
 	}
 }
@@ -433,7 +441,7 @@ func TestCatalogCloseDeadlineWhileProjectLocked(t *testing.T) {
 		t.Fatal("解锁后管理器收尾没有完成")
 	}
 	instances, err := m.catalog.Read()
-	if err != nil || len(instances) != 1 || instances[0].Components[0].LogCount != 2 {
+	if err != nil || len(instances) != 1 || catalogLogCount(instances[0].Components[0]) != 2 {
 		t.Fatalf("释放锁后没有完成最终同步: %+v, %v", instances, err)
 	}
 	metrics, err := m.registry.Gather()

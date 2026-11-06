@@ -247,7 +247,7 @@ func TestLogAndCatalogWithHealthMetricsDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	instances, err := m.catalog.Read()
-	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || instances[0].Components[0].LogCount != 2 {
+	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || catalogLogCount(instances[0].Components[0]) != 2 {
 		t.Fatalf("关闭健康导出改变了目录接收量: %+v, %v", instances, err)
 	}
 	if err := c.InfoSync(context.Background(), "关闭后", nil); !errors.Is(err, ErrClosed) {

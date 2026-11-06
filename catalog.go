@@ -67,7 +67,7 @@ func (m *Manager) publishCatalog() {
 			Description:  description,
 			CreatedAt:    activity.FirstAt,
 			LastActiveAt: activity.LastAt,
-			LogCount:     activity.Count,
+			LogCounts:    activity.LogCounts,
 		})
 	}
 	if m.startupLogs != nil {

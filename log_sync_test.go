@@ -162,7 +162,7 @@ func TestSynchronousCatalogActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	instances, err := m.catalog.Read()
-	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || instances[0].Components[0].LogCount != 1 {
+	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 || catalogLogCount(instances[0].Components[0]) != 1 {
 		t.Fatalf("同步接收量没有进入最终目录，或拒收被计入: %+v, %v", instances, err)
 	}
 	if component := instances[0].Components[0]; component.CreatedAt.IsZero() || component.LastActiveAt.Before(component.CreatedAt) {

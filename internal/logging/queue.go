@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
+	"github.com/mctxyz/syslogger/internal/hourly"
 	"github.com/mctxyz/syslogger/internal/identity"
 )
 
@@ -19,7 +20,7 @@ var (
 	ErrQueueFull = errors.New("syslogger: 日志队列已满")
 )
 
-// Queue 持有模块独立 FIFO、固定发送任务及同步交付的接收截止和累计计数。
+// Queue 持有模块独立 FIFO、固定发送任务、同步接收截止、失败计数及小时接收活动。
 type Queue struct {
 	mu          sync.Mutex
 	entries     chan *Entry
@@ -33,8 +34,8 @@ type Queue struct {
 	identity    string
 	rejected    atomic.Uint64
 	failed      atomic.Uint64
-	accepted    atomic.Uint64
-	// 活动窗口由现有队列锁保护，计数使用组件独立的原子量；磁盘维护只接收首次活动通知。
+	// 小时增量和活动时间由现有队列锁保护，磁盘维护只接收首次活动通知。
+	logCounts     hourly.Window
 	activityWake  chan<- struct{}
 	firstAccepted time.Time
 	lastAccepted  time.Time

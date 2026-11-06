@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
+	"github.com/mctxyz/syslogger/internal/hourly"
 	"github.com/rivo/uniseg"
 )
 
@@ -26,6 +27,20 @@ func preparedCatalogRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+func catalogCounts(at time.Time, count uint64) hourly.Window {
+	var window hourly.Window
+	window.Add(at, count)
+	return window
+}
+
+func catalogCountValue(component catalog.Component) uint64 {
+	var count uint64
+	for _, bucket := range component.LogCounts {
+		count += bucket.Count
+	}
+	return count
 }
 
 func TestCatalogOptions(t *testing.T) {
@@ -69,7 +84,7 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 		for index := range instance.Components {
 			instance.Components[index].CreatedAt = at
 			instance.Components[index].LastActiveAt = at
-			instance.Components[index].LogCount = 1
+			instance.Components[index].LogCounts = catalogCounts(at, 1)
 		}
 		if err := store.Merge(instance, at); err != nil {
 			t.Fatal(err)
@@ -80,21 +95,23 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 		t.Fatal(err)
 	}
 	timestamp := at.Local().Format("2006-01-02 15:04:05")
+	// 小时起点由查询时刻决定；目录结构单独验证，具体计数由下方时区用例验证。
+	countText := regexp.MustCompile(`每小时:[^\n]*`)
 	want := fmt.Sprintf(`mct-syslogger
 ├── a
 │   ├── local  主网实例
-│   │   ├── rpc     %[1]s  累计: 1
+│   │   ├── rpc     %[1]s  每小时: <hours>
 │   │   │           区块获取
-│   │   └── worker  %[1]s  累计: 1
+│   │   └── worker  %[1]s  每小时: <hours>
 │   │               后台任务
 │   └── other
-│       └── worker  %[1]s  累计: 1
+│       └── worker  %[1]s  每小时: <hours>
 │                   后台任务
 └── b
     └── local  B 实例
-        └── worker  %[1]s  累计: 1
+        └── worker  %[1]s  每小时: <hours>
 `, timestamp)
-	if output.String() != want {
+	if countText.ReplaceAllString(output.String(), "每小时: <hours>") != want {
 		t.Fatalf("目录树不符:\n%s", output.String())
 	}
 	output.Reset()
@@ -104,10 +121,10 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 	want = fmt.Sprintf(`mct-syslogger
 └── a
     └── local  主网实例
-        └── rpc  %s  累计: 1
+        └── rpc  %s  每小时: <hours>
                  区块获取
 `, timestamp)
-	if output.String() != want {
+	if countText.ReplaceAllString(output.String(), "每小时: <hours>") != want {
 		t.Fatalf("单项目筛选后的目录树不符:\n%s", output.String())
 	}
 	for _, args := range [][]string{
@@ -134,28 +151,13 @@ func TestCatalogTreeAndFiltering(t *testing.T) {
 }
 
 func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
-	now := time.Now().UTC()
-	at := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 1, 2, 345678901, time.UTC)
-	store := catalog.Store{Root: preparedCatalogRoot(t)}
-	components := []catalog.Component{
-		{Name: "zero", CreatedAt: at, LastActiveAt: at, LogCount: 0},
-		{Name: "maximum", Description: "RPC\t获取", CreatedAt: at, LastActiveAt: at, LogCount: ^uint64(0)},
-		{Name: "thousand", CreatedAt: at, LastActiveAt: at, LogCount: 1000},
-		{Name: "normal", CreatedAt: at, LastActiveAt: at, LogCount: 11483},
-	}
 	counts := map[string]string{
 		"zero":     "0",
 		"maximum":  "18,446,744,073,709,551,615",
 		"thousand": "1,000",
 		"normal":   "11,483",
 	}
-	if err := store.Merge(catalog.Instance{Project: "p", InstanceID: "i", Components: components}, now); err != nil {
-		t.Fatal(err)
-	}
-	stored, err := store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
 	for _, zone := range []struct {
 		name   string
 		offset int
@@ -163,6 +165,7 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 		{name: "UTC"},
 		{name: "east", offset: 8 * 60 * 60},
 		{name: "west", offset: -5 * 60 * 60},
+		{name: "fractional", offset: 5*60*60 + 45*60},
 	} {
 		t.Run(zone.name, func(t *testing.T) {
 			original := time.Local
@@ -170,7 +173,24 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 			t.Cleanup(func() {
 				time.Local = original
 			})
-			timestamp := at.UTC().Add(time.Duration(zone.offset) * time.Second).Format("2006-01-02 15:04:05")
+			// SDK 与 CLI 共用设备时区，先设置本例时区再创建该时区的小时桶。
+			now := time.Now().UTC()
+			at := now.Add(-time.Minute)
+			store := catalog.Store{Root: preparedCatalogRoot(t)}
+			components := []catalog.Component{
+				{Name: "zero", CreatedAt: at, LastActiveAt: at, LogCounts: catalogCounts(at, 0)},
+				{Name: "maximum", Description: "RPC\t获取", CreatedAt: at, LastActiveAt: at, LogCounts: catalogCounts(at, ^uint64(0))},
+				{Name: "thousand", CreatedAt: at, LastActiveAt: at, LogCounts: catalogCounts(at, 1000)},
+				{Name: "normal", CreatedAt: at, LastActiveAt: at, LogCounts: catalogCounts(at, 11483)},
+			}
+			if err := store.Merge(catalog.Instance{Project: "p", InstanceID: "i", Components: components}, now); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			timestamp := at.Local().Format("2006-01-02 15:04:05")
 			for _, colour := range []bool{false, true} {
 				var output bytes.Buffer
 				opts := testOptions(t, "--list")
@@ -180,15 +200,39 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 				}
 				for _, component := range components {
 					name := component.Name
-					timeText, countText := timestamp, "累计: "+counts[component.Name]
+					timeText := timestamp
 					if colour {
 						name = colourComponent + name + colourReset
 						timeText = colourCatalogDetails + timeText + colourReset
-						countText = colourCatalogDetails + countText + colourReset
 					}
-					want := name + strings.Repeat(" ", 8-len(component.Name)+2) + timeText + "  " + countText
-					if !strings.Contains(output.String(), want+"\n") {
-						t.Fatalf("组件数量、时间格式、时区或亮度不符: want=%q got=%q", want, output.String())
+					prefix := name + strings.Repeat(" ", 8-len(component.Name)+2) + timeText + "  "
+					var countText string
+					for _, line := range strings.Split(output.String(), "\n") {
+						_, content, hasBranch := strings.Cut(line, "── ")
+						if hasBranch && strings.HasPrefix(content, prefix) {
+							countText = strings.TrimPrefix(content, prefix)
+							break
+						}
+					}
+					if colour && (!strings.HasPrefix(countText, colourCatalogDetails) || !strings.HasSuffix(countText, colourReset)) {
+						t.Fatalf("小时计数未使用默认前景色弱化亮度：%q", countText)
+					}
+					plain := ansi.ReplaceAllString(countText, "")
+					parts := strings.Split(strings.TrimPrefix(plain, "每小时: "), " | ")
+					if !strings.HasPrefix(plain, "每小时: ") || len(parts) != hourly.Hours {
+						t.Fatalf("组件数量、时间格式或时区不符：prefix=%q got=%q", prefix, output.String())
+					}
+					wanted := hourly.Start(at).Local().Format("01-02 15:04 -0700") + "=" + counts[component.Name]
+					var found bool
+					for _, part := range parts {
+						if part == wanted {
+							found = true
+						} else if !strings.HasSuffix(part, "=0") {
+							t.Fatalf("未接收日志的小时出现数量：%q", part)
+						}
+					}
+					if !found {
+						t.Fatalf("小时起点或完整整数格式不符：want=%q got=%q", wanted, plain)
 					}
 				}
 				description := `RPC\t获取`
@@ -201,12 +245,26 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 				}
 			}
 			var output bytes.Buffer
+			beforeQuery := time.Now()
 			if err := showCatalog(store, testOptions(t, "--list", "--json", "--colour"), &output); err != nil {
 				t.Fatal(err)
 			}
 			var decoded []catalog.Instance
-			if err := json.Unmarshal(output.Bytes(), &decoded); err != nil || !reflect.DeepEqual(decoded, stored) {
-				t.Fatalf("可读显示格式影响了 JSON 目录数据: %s, %v", output.String(), err)
+			if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded) != 1 || len(decoded[0].Components) != len(components) {
+				t.Fatalf("JSON 目录丢失身份：%s", output.String())
+			}
+			base := decoded[0].Components[0].LogCounts[hourly.Hours-1].StartTime
+			if !base.Equal(hourly.Start(beforeQuery)) && !base.Equal(hourly.Start(time.Now())) {
+				t.Fatalf("JSON 目录没有使用查询当时的小时窗口：%v", base)
+			}
+			for index := range stored[0].Components {
+				stored[0].Components[index].LogCounts = stored[0].Components[index].LogCounts.Recent(base)
+			}
+			if !reflect.DeepEqual(decoded, stored) {
+				t.Fatalf("JSON 小时视图或身份元数据不符：%s", output.String())
 			}
 		})
 	}
@@ -230,13 +288,14 @@ func TestCatalogVisibleColumnAlignment(t *testing.T) {
 		for index := range instance.Components {
 			instance.Components[index].CreatedAt = at
 			instance.Components[index].LastActiveAt = at
-			instance.Components[index].LogCount = 1
+			instance.Components[index].LogCounts = catalogCounts(at, 1)
 		}
 		if err := store.Merge(instance, at); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
+	hourCounts := regexp.MustCompile(`每小时:[^\n]*`)
 	timestamp := at.Local().Format("2006-01-02 15:04:05")
 	for _, test := range []struct {
 		name   string
@@ -257,10 +316,11 @@ func TestCatalogVisibleColumnAlignment(t *testing.T) {
 					t.Fatal(err)
 				}
 				visible := ansi.ReplaceAllString(output.String(), "")
-				if colour && visible != plain {
-					t.Fatalf("ANSI 样式改变了对齐或文本:\n%s\n%s", plain, visible)
+				layout := hourCounts.ReplaceAllString(visible, "每小时: <hours>")
+				if colour && layout != plain {
+					t.Fatalf("ANSI 样式改变了对齐或文本:\n%s\n%s", plain, layout)
 				}
-				plain = visible
+				plain = layout
 				var components, descriptions int
 				for _, line := range strings.Split(visible, "\n") {
 					if position := strings.Index(line, timestamp); position >= 0 {
@@ -317,7 +377,7 @@ func TestCatalogEscapingColourAndErrors(t *testing.T) {
 	at := time.Now().UTC()
 	instance.Components[0].CreatedAt = at
 	instance.Components[0].LastActiveAt = at
-	instance.Components[0].LogCount = 1
+	instance.Components[0].LogCounts = catalogCounts(at, 1)
 	if err := os.Mkdir(store.Root, catalog.DirectoryMode); err != nil {
 		t.Fatal(err)
 	}
@@ -360,15 +420,15 @@ func TestCatalogExpiryIsReadOnlyAndPreservesUint64(t *testing.T) {
 	for _, id := range []string{"mixed", "expired"} {
 		if err := store.Merge(catalog.Instance{
 			Project: "p", InstanceID: id,
-			Components: []catalog.Component{{Name: "old", CreatedAt: old, LastActiveAt: old, LogCount: 7}},
+			Components: []catalog.Component{{Name: "old", CreatedAt: old, LastActiveAt: old, LogCounts: catalogCounts(old, 7)}},
 		}, old); err != nil {
 			t.Fatal(err)
 		}
 	}
-	recent := now.AddDate(0, -1, 0)
+	recent := now.Add(-time.Hour)
 	if err := store.Merge(catalog.Instance{
 		Project: "p", InstanceID: "mixed",
-		Components: []catalog.Component{{Name: "active", CreatedAt: recent, LastActiveAt: recent, LogCount: ^uint64(0)}},
+		Components: []catalog.Component{{Name: "active", CreatedAt: recent, LastActiveAt: recent, LogCounts: catalogCounts(recent, ^uint64(0))}},
 	}, recent); err != nil {
 		t.Fatal(err)
 	}
@@ -387,11 +447,51 @@ func TestCatalogExpiryIsReadOnlyAndPreservesUint64(t *testing.T) {
 		t.Fatalf("目录过期过滤不符: %s", output.String())
 	}
 	component := selected[0].Components[0]
-	if component.Name != "active" || component.LogCount != ^uint64(0) || !component.LastActiveAt.Equal(recent) {
+	if component.Name != "active" || catalogCountValue(component) != ^uint64(0) || !component.LastActiveAt.Equal(recent) {
 		t.Fatalf("目录元数据或 uint64 精度不符: %+v", component)
 	}
 	instances, err := store.Read()
 	if err != nil || len(instances) != 2 || len(instances[1].Components) != 2 {
 		t.Fatalf("只读查询改写了目录文件: %+v, %v", instances, err)
+	}
+}
+
+func TestCatalogExpiredHourlyCountsBecomeZeroWithoutRewritingFile(t *testing.T) {
+	store := catalog.Store{Root: preparedCatalogRoot(t)}
+	now := time.Now().UTC()
+	old := now.Add(-4 * time.Hour)
+	instance := catalog.Instance{Project: "p", InstanceID: "i", Components: []catalog.Component{{
+		Name: "quiet", CreatedAt: old, LastActiveAt: old, LogCounts: catalogCounts(old, 999),
+	}}}
+	if err := store.Merge(instance, old); err != nil {
+		t.Fatal(err)
+	}
+	path := store.Path("p", "i")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := showCatalog(store, testOptions(t, "--list", "--json"), &output); err != nil {
+		t.Fatal(err)
+	}
+	var selected []catalog.Instance
+	if err := json.Unmarshal(output.Bytes(), &selected); err != nil || len(selected) != 1 || len(selected[0].Components) != 1 {
+		t.Fatalf("小时数量过期时丢失了仍有效的身份：%s, %v", output.String(), err)
+	}
+	component := selected[0].Components[0]
+	if !component.LastActiveAt.Equal(old) || catalogCountValue(component) != 0 {
+		t.Fatalf("小时数量过期后未归零或改写了真实活动：%+v", component)
+	}
+	lastStart := component.LogCounts[hourly.Hours-1].StartTime
+	if !lastStart.Equal(hourly.Start(now)) && !lastStart.Equal(hourly.Start(time.Now())) {
+		t.Fatalf("静默组件仍展示过期的小时起点：%+v", component.LogCounts)
+	}
+	if expected := (hourly.Window{}).Recent(lastStart); component.LogCounts != expected {
+		t.Fatalf("查询没有补齐三个带起点的零计数：%+v", component.LogCounts)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("只读查询改写了历史文件：%s, %v", after, err)
 	}
 }

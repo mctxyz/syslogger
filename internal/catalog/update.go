@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mctxyz/syslogger/internal/hourly"
 )
 
 // Merge 在项目文件锁内将本次成功接收增量加入已有记录，写入成功后调用方消费该增量。
@@ -48,15 +50,17 @@ func (s Store) Merge(delta Instance, now time.Time) error {
 	instance.InstanceDescription = delta.InstanceDescription
 	components := make(map[string]Component, len(instance.Components)+len(delta.Components))
 	for _, component := range instance.Components {
+		component.LogCounts.Merge(hourly.Window{}, now)
 		components[component.Name] = component
 	}
 	for _, incoming := range delta.Components {
 		component, exists := components[incoming.Name]
 		if !exists {
 			component = incoming
+			component.LogCounts.Merge(hourly.Window{}, now)
 		} else {
 			// 宽限内记录仍在存续，保留历史让同组件的跨进程批次可按任意顺序合并。
-			component.LogCount += incoming.LogCount
+			component.LogCounts.Merge(incoming.LogCounts, now)
 			if incoming.CreatedAt.Before(component.CreatedAt) {
 				component.CreatedAt = incoming.CreatedAt
 			}
@@ -130,6 +134,9 @@ func (s Store) pruneProject(directory string, now time.Time) error {
 				return err
 			}
 		} else if len(active.Components) != len(instance.Components) {
+			for index := range active.Components {
+				active.Components[index].LogCounts.Merge(hourly.Window{}, now)
+			}
 			if err := s.write(active); err != nil {
 				return err
 			}
