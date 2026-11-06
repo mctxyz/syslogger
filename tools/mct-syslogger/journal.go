@@ -15,10 +15,22 @@ import (
 func (opts options) journalArgs() []string {
 	args := []string{
 		"--no-pager",
-		"--namespace=" + journalwire.Namespace,
+		"--namespace=*",
 		"--output=cat",
 		"--all",
 		"--since=" + opts.since,
+	}
+	var selected [journalwire.GroupCount]bool
+	for severity, name := range levels {
+		if contains(opts.levels, name) {
+			selected[journalwire.GroupForSeverity(uint8(severity))] = true
+		}
+	}
+	// 原生 namespace 字段限制返回范围；空等级仍保留空间边界，再由 PRIORITY 表达无结果。
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		if selected[group] || len(opts.levels) == 0 {
+			args = append(args, "_NAMESPACE="+group.Namespace())
+		}
 	}
 	if opts.until != "" {
 		args = append(args, "--until="+opts.until)

@@ -47,7 +47,13 @@ func TestJournalSmallMessageAndLargeMemfd(t *testing.T) {
 				t.Fatal(err)
 			}
 			id := identity.Instance{Project: "p", InstanceID: "i"}
-			tr := &transport{conn: conn, protocol: journalNative, id: id, component: "rpc", journalHeader: journalwire.Header(id, "rpc")}
+			tr := &transport{
+				conns:         [journalwire.GroupCount]net.Conn{journalwire.ErrorGroup: conn},
+				protocol:      journalNative,
+				id:            id,
+				component:     "rpc",
+				journalHeader: journalwire.Header(id, "rpc"),
+			}
 			entry := &Entry{Severity: Error, Body: []byte(strings.Repeat("x", size))}
 			if err := tr.send(context.Background(), entry); err != nil {
 				t.Fatal(err)
@@ -100,11 +106,17 @@ func TestJournalCloseInterruptsBackpressure(t *testing.T) {
 			id := identity.Instance{Project: "p", InstanceID: "i"}
 			ctx, cancel := context.WithCancel(context.Background())
 			q := &Queue{
-				entries:   make(chan *Entry, 64),
-				done:      make(chan struct{}),
-				ctx:       ctx,
-				cancel:    cancel,
-				transport: transport{conn: conn, protocol: journalNative, id: id, component: "rpc", journalHeader: journalwire.Header(id, "rpc")},
+				entries: make(chan *Entry, 64),
+				done:    make(chan struct{}),
+				ctx:     ctx,
+				cancel:  cancel,
+				transport: transport{
+					conns:         [journalwire.GroupCount]net.Conn{journalwire.InfoGroup: conn},
+					protocol:      journalNative,
+					id:            id,
+					component:     "rpc",
+					journalHeader: journalwire.Header(id, "rpc"),
+				},
 			}
 			go q.run()
 			entry := &Entry{Severity: Info, Body: bytes.Repeat([]byte("x"), size)}
@@ -137,13 +149,13 @@ func TestJournalWriteDeadline(t *testing.T) {
 			if err := conn.SetWriteBuffer(32 * 1024); err != nil {
 				t.Fatal(err)
 			}
-			tr := &transport{conn: conn, protocol: journalNative}
+			tr := &transport{conns: [journalwire.GroupCount]net.Conn{journalwire.InfoGroup: conn}, protocol: journalNative}
 			entry := &Entry{Severity: Info, Body: bytes.Repeat([]byte("x"), size)}
 			for index := 0; index < 100; index++ {
 				err := tr.send(context.Background(), entry)
 				if err != nil {
 					var timedOut net.Error
-					if !errors.As(err, &timedOut) || !timedOut.Timeout() || tr.conn != nil {
+					if !errors.As(err, &timedOut) || !timedOut.Timeout() || tr.conns[journalwire.InfoGroup] != nil {
 						t.Fatalf("背压未按写入截止失败并释放连接: %v", err)
 					}
 					return
@@ -151,5 +163,56 @@ func TestJournalWriteDeadline(t *testing.T) {
 			}
 			t.Fatal("没有形成可验证的原生 socket 背压")
 		})
+	}
+}
+
+func TestJournalGroupConnectionsAndFailureIsolation(t *testing.T) {
+	id := identity.Instance{Project: "project", InstanceID: "main"}
+	tr := &transport{
+		protocol:      journalNative,
+		id:            id,
+		component:     "rpc",
+		journalHeader: journalwire.Header(id, "rpc"),
+	}
+	t.Cleanup(tr.close)
+	var receivers [journalwire.GroupCount]*net.UnixConn
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		tr.conns[group], receivers[group] = journalSocketPair(t)
+	}
+	for severity := Emergency; severity <= Debug; severity++ {
+		entry := &Entry{Severity: severity, Body: []byte(levelNames[severity])}
+		if err := tr.send(context.Background(), entry); err != nil {
+			t.Fatal(err)
+		}
+		group := journalwire.GroupForSeverity(uint8(severity))
+		if err := receivers[group].SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		data := make([]byte, 4096)
+		n, err := receivers[group].Read(data)
+		if err != nil || !bytes.Equal(data[:n], journalwire.Message(tr.journalHeader, entry.Body, uint8(severity))) {
+			t.Fatalf("等级 %d 未保留正文与身份并投递到目标组: %v", severity, err)
+		}
+	}
+	if err := tr.conns[journalwire.DebugGroup].Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.send(context.Background(), &Entry{Severity: Debug}); err == nil || tr.conns[journalwire.DebugGroup] != nil {
+		t.Fatalf("失败组未释放连接: %v", err)
+	}
+	for group := journalwire.InfoGroup; group < journalwire.GroupCount; group++ {
+		if tr.conns[group] == nil {
+			t.Fatalf("错误关闭了 %s 空间连接", group.Name())
+		}
+	}
+	if err := tr.send(context.Background(), &Entry{Severity: Error}); err != nil {
+		t.Fatalf("其他组受单组失败影响: %v", err)
+	}
+	connections := tr.conns
+	tr.close()
+	for group, conn := range connections {
+		if conn != nil && conn.SetWriteDeadline(time.Now()) == nil {
+			t.Fatalf("关闭遗漏了组 %d 的连接", group)
+		}
 	}
 }

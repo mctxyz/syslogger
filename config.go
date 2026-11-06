@@ -29,7 +29,7 @@ type Config struct {
 	InstanceDescription string
 	// CatalogEnabled 将日志身份与最近三个自然小时的接收量发布到 /var/lib/mct-syslogger，零值关闭。
 	CatalogEnabled bool
-	// SyslogSocketPath 指定传统 syslog Unix socket，由接入方保证隔离；空值使用 Linux 的 mct-syslogger journal 命名空间。
+	// SyslogSocketPath 指定传统 syslog Unix socket，由接入方保证隔离；空值按等级写入 Linux 的四个专用 journal 空间。
 	SyslogSocketPath string
 	// DefaultQueueCapacity 指定模块日志队列的默认容量，零值为 512，合法范围为 1～4096。
 	DefaultQueueCapacity int

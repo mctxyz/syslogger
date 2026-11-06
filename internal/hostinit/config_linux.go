@@ -24,8 +24,10 @@ type configValue struct {
 	source string
 }
 
-// journalBaseName 关联 SDK 固定命名空间与 systemd 主文件、片段目录的名称。
-const journalBaseName = "journald@" + journalwire.Namespace + ".conf"
+// journalBaseName 关联等级组与 systemd 主文件、片段目录的名称。
+func journalBaseName(group journalwire.Group) string {
+	return "journald@" + group.Namespace() + ".conf"
+}
 
 func (init *initializer) installedSystemdVersion() (int, error) {
 	output, err := init.command("systemd-analyze", "--version")
@@ -57,14 +59,15 @@ func parseSystemdVersion(output string) (int, error) {
 }
 
 // journalConfigSources 按版本和目录优先级选择真实文件，正文注释不参与文件边界识别。
-func journalConfigSources(directories []string, version int) ([]configSource, error) {
+func journalConfigSources(directories []string, version int, group journalwire.Group) ([]configSource, error) {
 	var sources []configSource
+	baseName := journalBaseName(group)
 	mainDirectories := directories
 	if version < 256 {
 		mainDirectories = directories[:1]
 	}
 	for _, directory := range mainDirectories {
-		path := filepath.Join(directory, journalBaseName)
+		path := filepath.Join(directory, baseName)
 		data, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -81,7 +84,7 @@ func journalConfigSources(directories []string, version int) ([]configSource, er
 	}
 	selected := make(map[string]string)
 	for _, directory := range directories {
-		path := filepath.Join(directory, journalBaseName+".d")
+		path := filepath.Join(directory, baseName+".d")
 		entries, err := os.ReadDir(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -116,7 +119,7 @@ func journalConfigSources(directories []string, version int) ([]configSource, er
 }
 
 // checkJournalConfig 逐文件核对受管键，并在语法异常时拒绝宣称配置已经生效。
-func checkJournalConfig(sources []configSource, wanted map[string]string) error {
+func checkJournalConfig(sources []configSource, wanted map[string]string, group journalwire.Group) error {
 	values := make(map[string]configValue)
 	for _, source := range sources {
 		if err := readJournalSettings(source, wanted, values); err != nil {
@@ -129,7 +132,26 @@ func checkJournalConfig(sources []configSource, wanted map[string]string) error 
 			return fmt.Errorf("专用 journal 配置冲突：%s=%q，期望 %q，来源 %s；请管理员调整独立配置后重试", key, actual.value, expected, actual.source)
 		}
 	}
+	if actual, found := values["MaxLevelStore"]; found {
+		level, err := storeLevel(actual.value)
+		if err != nil {
+			return fmt.Errorf("配置 %s: %w", actual.source, err)
+		}
+		if level < group.MaxSeverity() {
+			return fmt.Errorf("专用 journal %s 配置冲突：MaxLevelStore=%q 会丢弃该组日志，来源 %s", group.Namespace(), actual.value, actual.source)
+		}
+	}
 	return nil
+}
+
+// storeLevel 只解析官方等级名称与 0～7；无法确认的值交由管理员修正。
+func storeLevel(value string) (uint8, error) {
+	for level, name := range [...]string{"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"} {
+		if value == name || value == strconv.Itoa(level) {
+			return uint8(level), nil
+		}
+	}
+	return 0, fmt.Errorf("无法确认 MaxLevelStore=%q，请使用原生等级名称或 0～7", value)
 }
 
 func readJournalSettings(source configSource, wanted map[string]string, values map[string]configValue) error {
@@ -186,8 +208,14 @@ func applyJournalLine(path, line string, section *string, wanted map[string]stri
 	key, value, found := strings.Cut(line, "=")
 	key = strings.Trim(key, " \t\r\n\v\f")
 	if found {
-		if _, managed := wanted[key]; managed {
-			values[key] = configValue{strings.Trim(value, " \t\r\n\v\f"), path}
+		value = strings.Trim(value, " \t\r\n\v\f")
+		if key == "MaxLevelStore" {
+			if _, err := storeLevel(value); err != nil {
+				return fmt.Errorf("配置 %s: %w", path, err)
+			}
+		}
+		if _, managed := wanted[key]; managed || key == "MaxLevelStore" {
+			values[key] = configValue{value, path}
 		}
 	}
 	return nil

@@ -4,8 +4,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 func TestConfigCommentsAndSyntax(t *testing.T) {
@@ -23,13 +26,13 @@ func TestConfigCommentsAndSyntax(t *testing.T) {
 		"\n\ufeff[Journal]\nCompress=no\n",
 	} {
 		sources := []configSource{{"60-owned.conf", journalConfig("5G")}, {"90-admin.conf", text}}
-		if err := checkJournalConfig(sources, journalSettings("5G")); err == nil || !strings.Contains(err.Error(), "90-admin.conf") {
+		if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err == nil || !strings.Contains(err.Error(), "90-admin.conf") {
 			t.Fatalf("正文注释、BOM 或损坏 section 绕过了检查: %q %v", text, err)
 		}
 	}
 	for _, text := range []string{"# /a/path\n", "[Other]\nCompress=no\n", "[Journal]\nSystemMaxUse=\\\n# 续行注释\n5G\n", "[Journal]\nCompress=yes\\"} {
 		sources := []configSource{{"60-owned.conf", journalConfig("5G")}, {"90-admin.conf", text}}
-		if err := checkJournalConfig(sources, journalSettings("5G")); err != nil {
+		if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -42,32 +45,32 @@ func TestCleanupRevealsLowerPriorityMain(t *testing.T) {
 	if err := os.MkdirAll(run, 0755); err != nil {
 		t.Fatal(err)
 	}
-	main := filepath.Join(etc, journalBaseName)
+	main := filepath.Join(etc, journalBaseName(journalwire.DebugGroup))
 	if err := testInitializer(io.Discard).writeJournalConfig(main, journalConfig("5G")); err != nil {
 		t.Fatal(err)
 	}
 	if err := testInitializer(io.Discard).writeJournalConfig(filepath.Join(main+".d", configName), journalConfig("5G")); err != nil {
 		t.Fatal(err)
 	}
-	exposed := filepath.Join(run, journalBaseName)
+	exposed := filepath.Join(run, journalBaseName(journalwire.DebugGroup))
 	if err := os.WriteFile(exposed, []byte("[broken\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	sources, err := journalConfigSources([]string{etc, run}, 256)
+	sources, err := journalConfigSources([]string{etc, run}, 256, journalwire.DebugGroup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkJournalConfig(sources, journalSettings("5G")); err != nil {
+	if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err != nil {
 		t.Fatal(err)
 	}
 	if err := testInitializer(io.Discard).removeManagedConfig(main); err != nil {
 		t.Fatal(err)
 	}
-	sources, err = journalConfigSources([]string{etc, run}, 256)
+	sources, err = journalConfigSources([]string{etc, run}, 256, journalwire.DebugGroup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkJournalConfig(sources, journalSettings("5G")); err == nil || !strings.Contains(err.Error(), exposed) {
+	if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err == nil || !strings.Contains(err.Error(), exposed) {
 		t.Fatalf("清理后遗漏了新显露的主文件: %v", err)
 	}
 }
@@ -89,22 +92,22 @@ func TestConfigSourceVersionsAndPrecedence(t *testing.T) {
 		}
 		return path
 	}
-	base := journalBaseName
+	base := journalBaseName(journalwire.DebugGroup)
 	main := write(0, base, journalConfig("5G"))
 	write(0, filepath.Join(base+".d", configName), journalConfig("5G"))
 	legacy := write(4, filepath.Join(base+".d", "90-admin.conf"), "[Journal]\nSystemMaxUse=1G\n")
 	for _, version := range []int{245, 247} {
-		sources, err := journalConfigSources(directories, version)
+		sources, err := journalConfigSources(directories, version, journalwire.DebugGroup)
 		if err != nil || len(sources) != 1 || sources[0].path != main {
 			t.Fatalf("旧版命名空间读取了 drop-in: %d %v %v", version, sources, err)
 		}
 	}
 	for _, version := range []int{248, 255, 256, 257} {
-		sources, err := journalConfigSources(directories, version)
+		sources, err := journalConfigSources(directories, version, journalwire.DebugGroup)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := checkJournalConfig(sources, journalSettings("5G")); err == nil || !strings.Contains(err.Error(), legacy) {
+		if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err == nil || !strings.Contains(err.Error(), legacy) {
 			t.Fatalf("遗漏了 split-usr 的 /lib 配置: %d %v", version, err)
 		}
 	}
@@ -112,22 +115,22 @@ func TestConfigSourceVersionsAndPrecedence(t *testing.T) {
 	if err := os.Symlink("/dev/null", masked); err != nil {
 		t.Fatal(err)
 	}
-	sources, err := journalConfigSources(directories, 257)
+	sources, err := journalConfigSources(directories, 257, journalwire.DebugGroup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkJournalConfig(sources, journalSettings("5G")); err != nil {
+	if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err != nil {
 		t.Fatalf("同名 /dev/null 没有屏蔽低优先级配置: %v", err)
 	}
 	if err := os.Remove(main); err != nil {
 		t.Fatal(err)
 	}
 	write(1, base, journalConfig("5G"))
-	oldSources, err := journalConfigSources(directories, 255)
+	oldSources, err := journalConfigSources(directories, 255, journalwire.DebugGroup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newSources, err := journalConfigSources(directories, 256)
+	newSources, err := journalConfigSources(directories, 256, journalwire.DebugGroup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +141,7 @@ func TestConfigSourceVersionsAndPrecedence(t *testing.T) {
 
 func TestManagedConfigVersionMigration(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "systemd")
-	main := filepath.Join(directory, journalBaseName)
+	main := filepath.Join(directory, journalBaseName(journalwire.DebugGroup))
 	dropin := filepath.Join(main+".d", configName)
 	if err := testInitializer(io.Discard).writeJournalConfig(main, journalConfig("5G")); err != nil {
 		t.Fatal(err)
@@ -180,6 +183,57 @@ func TestInstalledVersionParsing(t *testing.T) {
 	for _, input := range []string{"", "systemd unknown", "systemd 244"} {
 		if _, err := parseSystemdVersion(input); err == nil {
 			t.Fatalf("接受了不支持的版本: %q", input)
+		}
+	}
+}
+
+func TestStoreLevelRespectsEachGroup(t *testing.T) {
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		for level := 0; level < 8; level++ {
+			text := "[Journal]\nMaxLevelStore=" + strconv.Itoa(level) + "\n"
+			sources := []configSource{{"60-owned.conf", journalConfig("1G")}, {"90-admin.conf", text}}
+			err := checkJournalConfig(sources, journalSettings("1G"), group)
+			if (err == nil) != (uint8(level) >= group.MaxSeverity()) {
+				t.Fatalf("group=%s level=%d 检查错误: %v", group.Name(), level, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "90-admin.conf") {
+				t.Fatalf("冲突没有来源: %v", err)
+			}
+		}
+	}
+	for _, text := range []string{
+		"[Journal]\nMaxLevelStore=\n",
+		"[Journal]\nMaxLevelStore=info\nMaxLevelStore=\n",
+		"[Journal]\nMaxLevelStore=\nMaxLevelStore=debug\n",
+		"[Journal]\nMaxLevelStore=unknown\n",
+		"[Journal]\nMaxLevelStore=8\n",
+	} {
+		sources := []configSource{{"60-owned.conf", journalConfig("1G")}, {"90-admin.conf", text}}
+		if err := checkJournalConfig(sources, journalSettings("1G"), journalwire.DebugGroup); err == nil {
+			t.Fatalf("未拒绝无法确认的等级赋值: %q", text)
+		}
+	}
+	sources := []configSource{{"60-owned.conf", journalConfig("1G")}, {"90-admin.conf", "[Journal]\nMaxLevelStore=info\nMaxLevelStore=debug\n"}}
+	if err := checkJournalConfig(sources, journalSettings("1G"), journalwire.DebugGroup); err != nil {
+		t.Fatalf("有效的最终赋值未覆盖前值: %v", err)
+	}
+}
+
+func TestGroupConfigSourcesAreIndependent(t *testing.T) {
+	directory := t.TempDir()
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		path := filepath.Join(directory, journalBaseName(group)+".d", configName)
+		if err := testInitializer(io.Discard).writeJournalConfig(path, journalConfig(DefaultJournalMaxUse(group))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		sources, err := journalConfigSources([]string{directory}, 256, group)
+		if err != nil || len(sources) != 1 || !strings.Contains(sources[0].path, group.Namespace()) {
+			t.Fatalf("%s 读取了其他空间的配置: %v %v", group.Name(), sources, err)
+		}
+		if err := checkJournalConfig(sources, journalSettings(DefaultJournalMaxUse(group)), group); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

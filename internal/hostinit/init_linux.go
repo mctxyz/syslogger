@@ -34,19 +34,22 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 		}
 	}
 	init := initializer{ctx: ctx, logger: log.New(output, "", 0)}
-	init.logger.Printf("[开始初始化] 运行账户=%q journal容量=%q", opts.User, opts.JournalMaxUse)
+	init.logger.Printf("[开始初始化] 运行账户=%q", opts.User)
 	version, err := init.installedSystemdVersion()
 	if err != nil {
 		return err
 	}
-	for _, suffix := range []string{"socket", "service"} {
-		unit := "systemd-journald@" + journalwire.Namespace + "." + suffix
-		state, err := init.command("systemctl", "show", "--property=LoadState", "--value", unit)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(state) != "loaded" {
-			return fmt.Errorf("无法加载 %s，需要支持 journal namespaces 的 systemd 245+ 主机", unit)
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		init.logger.Printf("[等级空间] namespace=%q 持久化容量=%q", group.Namespace(), opts.JournalMaxUse[group])
+		for _, suffix := range []string{"socket", "service"} {
+			unit := "systemd-journald@" + group.Namespace() + "." + suffix
+			state, err := init.command("systemctl", "show", "--property=LoadState", "--value", unit)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(state) != "loaded" {
+				return fmt.Errorf("无法加载 %s，需要支持 journal namespaces 的 systemd 245+ 主机", unit)
+			}
 		}
 	}
 	account, err := user.Lookup(opts.User)
@@ -60,10 +63,20 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 	if err := init.prepareCatalog(catalog.Root, gid); err != nil {
 		return fmt.Errorf("准备名称目录: %w", err)
 	}
-	if err := init.prepareJournal(opts.JournalMaxUse, version); err != nil {
-		return fmt.Errorf("准备专用 journal: %w", err)
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		if err := init.prepareJournal(group, opts.JournalMaxUse[group], version); err != nil {
+			return fmt.Errorf("准备专用 journal %s: %w", group.Namespace(), err)
+		}
 	}
-	_, err = fmt.Fprintf(output, "初始化完成：目录 %s，写入组 %s，账户 %s；journal %s 持久化容量 %s，压缩开启。\n请重新登录或重启业务服务以刷新组身份。\n", catalog.Root, catalog.Group, account.Username, journalwire.Namespace, opts.JournalMaxUse)
+	if _, err := fmt.Fprintf(output, "初始化完成：目录 %s，写入组 %s，账户 %s；四空间持久化与压缩开启。\n", catalog.Root, catalog.Group, account.Username); err != nil {
+		return err
+	}
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		if _, err := fmt.Fprintf(output, "  %s：%s\n", group.Namespace(), opts.JournalMaxUse[group]); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintln(output, "请重新登录或重启业务服务以刷新组身份。")
 	return err
 }
 

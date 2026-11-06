@@ -106,7 +106,7 @@ func TestSyncBypassesBlockedFIFO(t *testing.T) {
 	t.Cleanup(func() { _ = blocked.Close() })
 	q := syncQueue(t, path, 1)
 	q.transport.mu.Lock()
-	q.transport.conn = asyncConn
+	q.transport.conns[0] = asyncConn
 	q.transport.protocol = syslogStream
 	q.transport.mu.Unlock()
 	if err := q.Enqueue(&Entry{Body: bytes.Repeat([]byte("x"), 64*1024)}); err != nil {

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
+	"github.com/mctxyz/syslogger/internal/journalwire"
 	"golang.org/x/sys/unix"
 )
 
@@ -20,7 +21,7 @@ func TestInitRequiresRoot(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("不在真实 root 环境运行主机初始化")
 	}
-	err := Run(context.Background(), Options{User: "app", JournalMaxUse: "5G"}, io.Discard)
+	err := Run(context.Background(), Options{User: "app", JournalMaxUse: [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"}}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "需要 root") {
 		t.Fatalf("普通账户应在任何主机变更前被拒绝: %v", err)
 	}
@@ -158,12 +159,12 @@ func TestJournalConfigOwnershipAndOverrides(t *testing.T) {
 			t.Fatalf("不应配置 /run 容量: %s %v", data, err)
 		}
 		sources := []configSource{{path, string(data)}}
-		if err := checkJournalConfig(sources, journalSettings(capacity)); err != nil {
+		if err := checkJournalConfig(sources, journalSettings(capacity), journalwire.DebugGroup); err != nil {
 			t.Fatal(err)
 		}
 		for _, override := range []string{"SystemMaxUse=1G", "Compress=no", "Storage=volatile", "ForwardToSyslog=yes"} {
 			conflict := append(sources, configSource{filepath.Join(directory, "90-admin.conf"), "[Journal]\n" + override + "\n"})
-			if err := checkJournalConfig(conflict, journalSettings(capacity)); err == nil || !strings.Contains(err.Error(), "90-admin.conf") {
+			if err := checkJournalConfig(conflict, journalSettings(capacity), journalwire.DebugGroup); err == nil || !strings.Contains(err.Error(), "90-admin.conf") {
 				t.Fatalf("管理员高优先级配置没有明确报错: %s %v", override, err)
 			}
 		}
@@ -207,17 +208,17 @@ func TestActivationRetriesAfterInterruptedApply(t *testing.T) {
 	t.Setenv("PATH", directory)
 	t.Setenv("INIT_TEST_LOG", logPath)
 	t.Setenv("INIT_TEST_FAIL", failPath)
-	if err := testInitializer(io.Discard).activateJournal(); err == nil {
+	if err := testInitializer(io.Discard).activateJournal(journalwire.WarningGroup); err == nil {
 		t.Fatal("未报告首次应用失败")
 	}
 	if err := os.Remove(failPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := testInitializer(io.Discard).activateJournal(); err == nil {
+	if err := testInitializer(io.Discard).activateJournal(journalwire.WarningGroup); err == nil {
 		t.Fatal("未报告入口尚未就绪")
 	}
 	data, err := os.ReadFile(logPath)
-	if err != nil || strings.Count(string(data), "restart systemd-journald@mct-syslogger.service") != 2 {
+	if err != nil || strings.Count(string(data), "restart systemd-journald@mct-syslogger-warning.service") != 2 {
 		t.Fatalf("重复初始化没有重新应用配置: %s %v", data, err)
 	}
 	if strings.Contains(string(data), "restart systemd-journald.service") {
@@ -230,7 +231,7 @@ func TestSystemdOfflineConfiguration(t *testing.T) {
 		t.Skip("本机没有离线配置合并工具")
 	}
 	root := t.TempDir()
-	base := "systemd/journald@mct-syslogger.conf"
+	base := "systemd/" + journalBaseName(journalwire.DebugGroup)
 	directory := filepath.Join(root, "etc", base+".d")
 	if err := os.MkdirAll(filepath.Dir(directory), 0755); err != nil {
 		t.Fatal(err)
@@ -242,11 +243,11 @@ func TestSystemdOfflineConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sources, err := journalConfigSources([]string{filepath.Join(root, "etc/systemd")}, 248)
+	sources, err := journalConfigSources([]string{filepath.Join(root, "etc/systemd")}, 248, journalwire.DebugGroup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkJournalConfig(sources, journalSettings("5G")); err != nil || !strings.Contains(merged, configName) {
+	if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err != nil || !strings.Contains(merged, configName) {
 		t.Fatalf("真实 systemd 离线配置合并不兼容: %v\n%s", err, merged)
 	}
 	conflict := filepath.Join(directory, "90-admin.conf")
@@ -257,11 +258,11 @@ func TestSystemdOfflineConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sources, err = journalConfigSources([]string{filepath.Join(root, "etc/systemd")}, 248)
+	sources, err = journalConfigSources([]string{filepath.Join(root, "etc/systemd")}, 248, journalwire.DebugGroup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkJournalConfig(sources, journalSettings("5G")); err == nil || !strings.Contains(err.Error(), "90-admin.conf") || !strings.Contains(merged, "90-admin.conf") {
+	if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err == nil || !strings.Contains(err.Error(), "90-admin.conf") || !strings.Contains(merged, "90-admin.conf") {
 		t.Fatalf("真实 systemd 优先级覆盖未报告: %v", err)
 	}
 }

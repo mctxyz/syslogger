@@ -23,15 +23,17 @@ rpc.Healthy()
 
 ## 日志入口与协议
 
-Linux 默认通过 `/run/systemd/journal.mct-syslogger/socket` 的原生 journal 协议写入固定的 `mct-syslogger` 命名空间，同时发送 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 三个独立原文身份字段，供 journal 索引检索；`MESSAGE` 保持上述完整 JSON 字节。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 拥有连接，连接和写入各使用一秒等待上限；普通异步调用线程只编码和入队。
+Linux 默认按 severity 选择 `/run/systemd/journal.<namespace>/socket` 的原生 journal 入口：debug 使用 `mct-syslogger-debug`，info/notice 使用 `mct-syslogger-info`，warning 使用 `mct-syslogger-warning`，error/critical/alert/emergency 使用 `mct-syslogger-error`。每条只写一个空间，保留真实 `PRIORITY`、`SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 及完整 JSON `MESSAGE`。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 拥有连接，连接和写入各使用一秒等待上限；普通异步调用线程只编码和入队。
 
 专用命名空间由管理员在 systemd 245+ 主机上预先启用，独立管理存储和轮转，部署步骤见[专用 journal 配置](journal.md)。默认入口不可连接时按发送失败处理，不自动转写默认 journal 或系统 syslog，原生 `log` 故障诊断继续保留。其他平台的默认发送返回不支持错误，可通过显式 `SyslogSocketPath` 接入独立传统 syslog 服务；自定义入口的隔离和转发策略由部署方保证。
 
-`SyslogSocketPath` 可指定部署或隔离测试的传统 syslog 路径，按 Unix datagram、stream 顺序连接该路径；原生 journal socket 使用默认配置接入，不能填入这个传统协议选项。默认异步连接延迟到后台首次发送，同一组件复用成功连接，发送失败后在后续事件重新连接同一专用入口。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。标准库 `log` 仍承担独立故障诊断和无效组件句柄兜底，默认写入 stderr，被宿主收集后可能进入默认系统日志。
+`SyslogSocketPath` 可指定部署或隔离测试的传统 syslog 路径，八级共用该路径，按 Unix datagram、stream 顺序连接；原生 journal socket 使用默认配置接入，不能填入这个传统协议选项。默认异步连接延迟到对应等级组首次发送，同一组件最多持有四个成功连接，发送失败只释放该组连接，后续同组事件重连。设备负责实际留存、过滤、限流及中心转发，提交 Debug 不保证最终可查询。标准库 `log` 仍承担独立故障诊断和无效组件句柄兜底，默认写入 stderr，被宿主收集后可能进入默认系统日志。
 
 ## 队列与发送失败
 
 每模块拥有有缓冲 channel 组成的独立指针 FIFO 和固定发送任务。`Config.DefaultQueueCapacity` 为管理器设置模块默认容量，零值为 512，合法范围为 1～4096，`New` 和 `SafeNew` 均可配置。`New` 拒绝非法默认容量，`SafeNew` 回退 512 并记录配置纠正。
+
+四空间独立的是磁盘留存预算；同一组件的八级仍共用队列和发送任务，debug 积压可能影响其他等级。队列保持发送尝试顺序，跨空间不承诺 journald 接收与落盘的全局顺序。
 
 `Register(ComponentConfig)` 按 `Name` 建立模块，`Description` 用于日志名称目录展示。`QueueCapacity` 为 1～4096 时使用原值，零值及其他值采用管理器默认容量。例如：
 
@@ -86,6 +88,6 @@ go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
 ./tools/bin/mct-syslogger -p contract-listener -i local-a -c rpc -s=-2h -k '超时'
 ```
 
-CLI 固定通过 `journalctl --namespace=mct-syslogger` 查询专用命名空间，将项目、实例、组件条件直接交给 `SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 原生字段索引，随后继续复核 JSON 正文。应用与 CLI 需配套升级，旧默认 journal 中的历史记录继续用普通 `journalctl` 查询，迁移说明见[专用 journal 配置](journal.md#升级与排障)。身份筛选依赖对应原生字段，传统 syslog 出口的记录不具备这些索引；外部采集转发时也应保留三个身份字段。
+CLI 使用一个 `journalctl --namespace='*'`，以精确 `_NAMESPACE` 匹配限定所选等级对应的四空间，再追加三个身份和 `PRIORITY` 原生索引条件。journalctl 原生交错读取并按收录时间组织记录，CLI 继续复核 JSON 正文并处理关键词、匹配条数和输出。通配入口会枚举可访问的 namespace，返回范围由精确条件限定。身份筛选依赖原生字段，传统 syslog 出口的记录不具备这些索引；外部采集转发时也应保留三个身份字段。SDK、CLI 和主机入口需配套更新，见[迁移说明](journal.md#升级与手动清理旧空间)。
 
 编译使用 Go 1.23+，日志查询运行环境为 Linux、systemd 245+ 和 journalctl。Release 下载、安装与完整参数见[工具说明](../tools/README.md)。

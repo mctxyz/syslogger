@@ -1,6 +1,6 @@
 # 日志检索工具
 
-`mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询固定读取 `mct-syslogger` journal 命名空间，以模块的原生 journal JSON 正文为输入契约，通过 `journalctl` 的项目、实例、组件和等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要 Linux、systemd 245+、journalctl 及相应读取权限，专用命名空间的准备见[部署说明](../docs/journal.md)。
+`mct-syslogger` 面向本 syslogger 模块，提供本机日志名称目录和日志检索。目录查询读取模块发布的共享 JSON；日志查询读取 debug、info/notice、warning、error 及以上四个专用 journal 空间，以模块的原生 journal JSON 正文为输入契约，通过 `journalctl` 的命名空间、身份和等级索引预筛，再使用 [go-json v0.12.0](https://github.com/goccy/go-json/tree/v0.12.0) 解析正文并复核全部条件。源码位于 [mct-syslogger](mct-syslogger)，入口、参数、帮助、目录显示、记录解析、筛选、格式化和 journal 查询按职责分文件组织。运行时只需一个二进制；分发时同时保留 [第三方许可](THIRD_PARTY_NOTICES.md)。日志检索需要 Linux、systemd 245+、journalctl 及相应读取权限，入口准备见[部署说明](../docs/journal.md)。
 
 ## 快速上手：先找名称，再查日志
 
@@ -42,15 +42,18 @@ mct-syslogger -p example-project -i example-instance -c example-component -s=-2h
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash'
 ```
 
-[安装脚本](https://github.com/mctxyz/syslogger/blob/main/tools/install/install.sh) 自动识别 amd64／arm64，解析最新 Release 的固定 tag，下载对应压缩包并校验 `SHA256SUMS`。验证二进制支持 `init` 后，交互收集以下参数：
+[安装脚本](https://github.com/mctxyz/syslogger/blob/main/tools/install/install.sh) 自动识别 amd64／arm64，解析最新 Release 的固定 tag，下载对应压缩包并校验 `SHA256SUMS`。在安装写入前通过四个参数置于 `--help` 之前的只读解析检查，确认候选支持配套 init 契约；不支持时停止，保留原有安装。之后交互收集以下参数：
 
 | 参数 | 默认值与用途 |
 | --- | --- |
 | 安装前缀 | `/usr/local`；命令安装到 `bin/mct-syslogger`，使用说明、许可和部署文档安装到 `share/doc/mct-syslogger/` |
 | 程序运行账户 | 必填，使用已存在的账户；本地身份来源和目录组权限由 `init` 校验 |
-| journal 持久化容量 | `5G`；传给 `init --journal-max-use`，正整数字节或 `K/M/G/T/P/E` 单位 |
+| debug 持久化容量 | `1G`，传给 `--journal-debug-max-use` |
+| info/notice 持久化容量 | `2G`，传给 `--journal-info-max-use` |
+| warning 持久化容量 | `1G`，传给 `--journal-warning-max-use` |
+| error 及以上持久化容量 | `1G`，传给 `--journal-error-max-use` |
 
-脚本显示版本、路径及初始化影响，确认后安装并自动执行 `mct-syslogger init --user=账户 --journal-max-use=容量`。普通用户仅在系统写入及初始化时通过 `sudo` 提权，root 可直接运行；无需对整个下载管道使用 `sudo`。可先下载并审阅脚本，再使用 `bash install.sh`，或用 `bash install.sh --help` 查看说明。
+四项容量接受正整数字节或 `K/M/G/T/P/E` 单位。脚本显示版本、路径、四项容量及初始化影响，确认后安装并执行带运行账户和四容量参数的 `mct-syslogger init`。普通用户仅在系统写入及初始化时通过 `sudo` 提权，root 可直接运行；无需对整个下载管道使用 `sudo`。可先下载并审阅脚本，再使用 `bash install.sh`，或用 `bash install.sh --help` 查看说明。
 
 需要 Bash、curl、GNU tar/coreutils、awk、getent、root 或 sudo，以及初始化所需的 Linux、systemd 245+ 和系统工具。交互从 `/dev/tty` 读取，支持管道安装；没有控制终端时明确失败。自定义安装前缀的 `bin/` 若未在 PATH 中，可使用安装后显示的绝对路径运行命令。
 
@@ -122,19 +125,21 @@ sudo usermod -aG systemd-journal username
 
 退出并重新登录后组权限生效。命令的 `--help` 提供查询流程和排障提示，账户权限由管理员按本节配置。
 
-日志查询统一向 `journalctl` 传入 `--namespace=mct-syslogger`，身份、等级、时间及跟踪参数继续按下文组合。专用存储、容量和轮转独立于默认 journal；原生 `log` 兜底继续由宿主程序的 stderr／标准日志配置接管。SDK 与 CLI 需配套升级，旧默认 journal 历史仍可使用普通 `journalctl` 查看。
+日志查询使用一个 `journalctl --namespace='*'`，以所选等级组的精确 `_NAMESPACE` 条件限定返回范围，身份、等级、时间及跟踪参数继续按下文组合。各组独立管理容量、轮转和压缩；原生 `log` 兜底继续由宿主程序的 stderr／标准日志配置接管。SDK、CLI 和主机入口需配套升级，见[升级与手动清理](../docs/journal.md#升级与手动清理旧空间)。
 
 ## 初始化主机
 
 ```sh
 sudo mct-syslogger init --user appuser
-sudo mct-syslogger init --user appuser --journal-max-use 10G
+sudo mct-syslogger init --user appuser \
+  --journal-debug-max-use 1G --journal-info-max-use 2G \
+  --journal-warning-max-use 1G --journal-error-max-use 1G
 mct-syslogger init --help
 ```
 
 `--user` 是已有本机程序运行账户，必须明确提供，root-only 部署可指定 root；初始化需要 root、Linux、systemd 245+，以及 GNU `getent`、`groupadd`、`usermod`、`systemctl`、`systemd-analyze`。独立子命令负责创建本机 `mct-syslogger` 组、追加该账户、准备名称目录和专用 journal。目录及项目子目录为 `2775`，JSON 和稳定锁为 `0664`，其他本机账户只读。检查按数值 GID 覆盖可枚举的主组、别名组及附加成员，默认 `files systemd` 可用；外部不可枚举身份源、自定义 userdb 及额外服务组授权由管理员核验。扩展／默认 ACL、越界链接或非受管对象会明确报错；已完成步骤不自动回滚，可修正后重复执行。
 
-`--journal-max-use` 控制本机专用命名空间全部项目的持久化 journal 总占用，默认 `5G`（5 GiB），接受正整数字节及 `K/M/G/T/P/E` 单位。配置开启 journald 原生透明压缩，查询自动解压，容量统计包含索引、元数据与压缩后的数据；`/run` 临时日志容量沿用系统现有配置。每次执行按本次参数应用配置并重启专用 journald 实例；省略容量参数仍采用 `5G`，缩小容量可能触发 journald 清理旧归档，容量并非严格硬配额。
+四项参数分别控制 `mct-syslogger-debug/info/warning/error` 的持久化占用，notice 归 info，默认合计 5 GiB。配置开启原生透明压缩，查询自动解压，容量统计包含索引、元数据和压缩数据；`/run` 临时日志容量沿用系统现有配置。每次执行按本次参数应用配置并重启四个专用实例；省略某项使用其默认值，缩容可能触发对应空间清理旧归档，容量并非严格硬配额。SDK 负责路由，init 只检查 `MaxLevelStore` 不会过滤目标组日志，不生成该设置。
 
 首次迁移前停止旧版写入进程。初始化保留数据及锁 inode、管理员独立配置和默认系统 journal；管理员高优先级配置覆盖受管设置时报告真实来源并失败。245–247 使用受管命名空间主文件，248+ 使用受管 drop-in，版本切换清理安全可确认的旧工具配置。完成后重新登录或重启业务服务刷新组身份，日志读取权限仍单独管理。配置路径与应用步骤见[部署说明](../docs/journal.md)。
 

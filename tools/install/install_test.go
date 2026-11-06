@@ -22,7 +22,10 @@ import (
 
 const fakeCLI = `#!/usr/bin/env bash
 set -euo pipefail
-if [[ $# -eq 2 && "$1" == init && "$2" == --help ]]; then
+if [[ "$1" == init && "${!#}" == --help ]]; then
+    if [[ $# -gt 2 && "$MOCK_FOUR_GROUPS" == 0 ]]; then
+        exit 2
+    fi
     exit "$MOCK_HELP_STATUS"
 fi
 printf '%s\0' "$@" > "$MOCK_LOG/init"
@@ -110,6 +113,7 @@ func newFixture(t *testing.T) *installerFixture {
 			"MOCK_UID":           "1000",
 			"MOCK_RELEASE_URL":   "https://github.com/mctxyz/syslogger/releases/tag/test-release",
 			"MOCK_HELP_STATUS":   "0",
+			"MOCK_FOUR_GROUPS":   "1",
 			"MOCK_INIT_STATUS":   "0",
 			"MOCK_DOWNLOAD_FAIL": "0",
 			"MOCK_SUDO_FAIL":     "0",
@@ -272,7 +276,7 @@ func (f *installerFixture) run(t *testing.T, input string, tty bool, args ...str
 }
 
 func (f *installerFixture) input(capacity, confirmation string) string {
-	return f.prefix + "\nappuser\n" + capacity + "\n" + confirmation + "\n"
+	return f.prefix + "\nappuser\n" + capacity + "\n\n\n\n" + confirmation + "\n"
 }
 
 func readLog(t *testing.T, path string) string {
@@ -319,10 +323,10 @@ func TestInstallerInstallsAndInitializes(t *testing.T) {
 			}
 			capacity := test.capacity
 			if capacity == "" {
-				capacity = "5G"
+				capacity = "1G"
 			}
 			got := strings.Split(strings.TrimSuffix(readLog(t, filepath.Join(f.log, "init")), "\x00"), "\x00")
-			want := []string{"init", "--user=appuser", "--journal-max-use=" + capacity}
+			want := []string{"init", "--user=appuser", "--journal-debug-max-use=" + capacity, "--journal-info-max-use=2G", "--journal-warning-max-use=1G", "--journal-error-max-use=1G"}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("初始化参数不符: got=%q want=%q", got, want)
 			}
@@ -355,7 +359,7 @@ func TestInstallerInstallsAndInitializes(t *testing.T) {
 }
 
 func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
-	for _, name := range []string{"cancel", "cancel-default-prefix", "no-tty", "eof", "unsupported-os", "unsupported-arch", "download", "bad-digest", "missing-digest", "duplicate-digest", "old-release", "symlink", "release-url", "term", "interrupt"} {
+	for _, name := range []string{"cancel", "cancel-default-prefix", "no-tty", "eof", "unsupported-os", "unsupported-arch", "download", "bad-digest", "missing-digest", "duplicate-digest", "old-release", "single-space-release", "symlink", "release-url", "term", "interrupt"} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			input, tty := f.input("", "y"), true
@@ -365,7 +369,7 @@ func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
 				input = f.input("", "n")
 				expectedStatus = 0
 			case "cancel-default-prefix":
-				input = "\nappuser\n\nn\n"
+				input = "\nappuser\n\n\n\n\nn\n"
 				expectedStatus = 0
 			case "no-tty":
 				tty = false
@@ -387,6 +391,8 @@ func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
 				writeFile(t, path, text+text, 0o644)
 			case "old-release":
 				f.settings["MOCK_HELP_STATUS"] = "2"
+			case "single-space-release":
+				f.settings["MOCK_FOUR_GROUPS"] = "0"
 			case "symlink":
 				f.writeAssets(t, true)
 			case "release-url":
@@ -450,12 +456,12 @@ func TestInstallerInputAndInitFailure(t *testing.T) {
 	f := newFixture(t)
 	f.settings["MOCK_INIT_STATUS"] = "42"
 	capacity := "5G; printf injected"
-	input := "relative\n" + f.prefix + "\nmissing-user\nappuser\n" + capacity + "\ny\n"
+	input := "relative\n" + f.prefix + "\nmissing-user\nappuser\n" + capacity + "\n\n\n\ny\n"
 	output, status := f.run(t, input, true)
 	if status != 42 {
 		t.Fatalf("init 失败状态丢失: %d\n%s", status, output)
 	}
-	want := "init\x00--user=appuser\x00--journal-max-use=" + capacity + "\x00"
+	want := "init\x00--user=appuser\x00--journal-debug-max-use=" + capacity + "\x00--journal-info-max-use=2G\x00--journal-warning-max-use=1G\x00--journal-error-max-use=1G\x00"
 	if got := readLog(t, filepath.Join(f.log, "init")); got != want {
 		t.Fatalf("输入被执行或参数被拆分: %q", got)
 	}

@@ -155,8 +155,8 @@ func (init *initializer) removeManagedConfig(path string) error {
 	return nil
 }
 
-func (init *initializer) prepareJournal(maxUse string, version int) error {
-	mainPath := filepath.Join("/etc/systemd", journalBaseName)
+func (init *initializer) prepareJournal(group journalwire.Group, maxUse string, version int) error {
+	mainPath := filepath.Join("/etc/systemd", journalBaseName(group))
 	dropinPath := filepath.Join(mainPath+".d", configName)
 	target, previous := dropinPath, mainPath
 	if version < 248 {
@@ -166,37 +166,37 @@ func (init *initializer) prepareJournal(maxUse string, version int) error {
 	if err := init.writeJournalConfig(target, journalConfig(maxUse)); err != nil {
 		return err
 	}
-	sources, err := journalConfigSources([]string{"/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"}, version)
+	sources, err := journalConfigSources([]string{"/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"}, version, group)
 	if err != nil {
 		return err
 	}
 	for _, source := range sources {
 		init.logger.Printf("[读取配置] %q", source.path)
 	}
-	if err := checkJournalConfig(sources, journalSettings(maxUse)); err != nil {
+	if err := checkJournalConfig(sources, journalSettings(maxUse), group); err != nil {
 		return err
 	}
 	if err := init.removeManagedConfig(previous); err != nil {
 		return err
 	}
 	// 删除旧主文件可能使较低优先级主文件显露，重启前核验最终实际集合。
-	sources, err = journalConfigSources([]string{"/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"}, version)
+	sources, err = journalConfigSources([]string{"/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"}, version, group)
 	if err != nil {
 		return err
 	}
 	for _, source := range sources {
 		init.logger.Printf("[读取配置] %q", source.path)
 	}
-	if err := checkJournalConfig(sources, journalSettings(maxUse)); err != nil {
+	if err := checkJournalConfig(sources, journalSettings(maxUse), group); err != nil {
 		return err
 	}
-	return init.activateJournal()
+	return init.activateJournal(group)
 }
 
 // activateJournal 每次都应用配置，覆盖上次在写入后、应用前中断的情况。
-func (init *initializer) activateJournal() error {
-	socket := "systemd-journald@" + journalwire.Namespace + ".socket"
-	service := "systemd-journald@" + journalwire.Namespace + ".service"
+func (init *initializer) activateJournal(group journalwire.Group) error {
+	socket := "systemd-journald@" + group.Namespace() + ".socket"
+	service := "systemd-journald@" + group.Namespace() + ".service"
 	for _, args := range [][]string{
 		{"add-wants", "sockets.target", socket},
 		{"start", socket},
@@ -212,14 +212,14 @@ func (init *initializer) activateJournal() error {
 			init.logger.Printf("[systemctl 输出] %s", strings.TrimSpace(output))
 		}
 	}
-	info, err := os.Lstat(journalwire.SocketPath)
+	info, err := os.Lstat(group.SocketPath())
 	if err != nil {
 		return fmt.Errorf("检查专用日志入口: %w", err)
 	}
 	if info.Mode()&os.ModeSocket == 0 {
-		return fmt.Errorf("专用日志入口 %s 不是 socket", journalwire.SocketPath)
+		return fmt.Errorf("专用日志入口 %s 不是 socket", group.SocketPath())
 	}
-	init.logger.Printf("[检查日志入口] %q 为 Unix socket", journalwire.SocketPath)
+	init.logger.Printf("[检查日志入口] %q 为 Unix socket", group.SocketPath())
 	return nil
 }
 

@@ -33,7 +33,7 @@ main() {
                     '用法：bash install.sh' \
                     '下载最新 GitHub Release，交互安装并运行 mct-syslogger init。' \
                     '支持 Linux amd64/arm64，需要交互终端、curl、GNU tar/coreutils、awk、getent，以及 root 或 sudo。' \
-                    '安装前缀默认 /usr/local；运行账户必填；journal 持久化容量默认 5G。'
+                    '安装前缀默认 /usr/local；运行账户必填；debug/info/warning/error 空间默认分别 1G/2G/1G/1G。'
                 return
                 ;;
             *)
@@ -117,11 +117,17 @@ main() {
             die "发布包中的 $relative 必须是普通文件。"
     done
     candidate="$work_dir/unpacked/$package/mct-syslogger"
-    if ! "$candidate" init --help >"$work_dir/init-help.txt" 2>&1; then
-        die '发布包无法运行 init --help，请检查架构及 Release 是否包含 init 子命令。'
+    local -a groups=(debug info warning error) capacities=(1G 2G 1G 1G) probe_args=(init)
+    local index
+    for index in "${!groups[@]}"; do
+        probe_args+=("--journal-${groups[$index]}-max-use=${capacities[$index]}")
+    done
+    # 参数必须置于帮助之前，防止 main 的脚本先于配套 Release 发布时覆盖已有安装。
+    if ! "$candidate" "${probe_args[@]}" --help >"$work_dir/init-help.txt" 2>&1; then
+        die '发布包不支持四个等级空间的 init 参数或无法运行，请等待配套 Release 并检查架构。'
     fi
 
-    local prefix runtime_user capacity target doc_dir status
+    local prefix runtime_user target doc_dir status
     while true; do
         prompt '安装前缀 [/usr/local]（命令放入其 bin/）：' '/usr/local'
         prefix=$REPLY
@@ -143,14 +149,19 @@ main() {
         fi
         printf '请输入一个已存在的运行账户。\n' >&2
     done
-    prompt '专用 journal 持久化总容量 [5G]（正整数字节或 K/M/G/T/P/E）：' '5G'
-    capacity=$REPLY
+    for index in "${!groups[@]}"; do
+        prompt "${groups[$index]} journal 持久化容量 [${capacities[$index]}]（正整数字节或 K/M/G/T/P/E）：" "${capacities[$index]}"
+        capacities[$index]=$REPLY
+    done
     target="$prefix/bin/mct-syslogger"
     doc_dir="$prefix/share/doc/mct-syslogger"
-    printf '\n版本：%s（linux/%s）\n命令：%s\n文档：%s\n运行账户：%s\njournal 容量：%s\n' \
-        "$tag" "$arch" "$target" "$doc_dir" "$runtime_user" "$capacity"
+    printf '\n版本：%s（linux/%s）\n命令：%s\n文档：%s\n运行账户：%s\n' \
+        "$tag" "$arch" "$target" "$doc_dir" "$runtime_user"
+    for index in "${!groups[@]}"; do
+        printf 'journal %s 容量：%s\n' "${groups[$index]}" "${capacities[$index]}"
+    done
     printf '%s\n' \
-        '将更新上述命令和文档，并以 root 运行 init：调整目录组权限、应用配置、重启专用 journald 实例。' \
+        '将更新上述命令和文档，并以 root 运行 init：调整目录组权限、应用配置、重启四个专用 journald 实例。' \
         '需要 Linux、systemd 245+ 及 init 所需系统工具；账户、权限和容量规则由 init 校验。' \
         '首次迁移前请停止旧版业务进程；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
     prompt '确认安装并初始化？[y/N]：' 'n'
@@ -169,7 +180,11 @@ main() {
         "${elevate[@]}" install -m 0644 -T -- "$work_dir/unpacked/$package/$relative" "$doc_dir/$relative"
     done
     "${elevate[@]}" install -m 0755 -T -- "$candidate" "$target"
-    if "${elevate[@]}" "$target" init "--user=$runtime_user" "--journal-max-use=$capacity"; then
+    local -a init_args=(init "--user=$runtime_user")
+    for index in "${!groups[@]}"; do
+        init_args+=("--journal-${groups[$index]}-max-use=${capacities[$index]}")
+    done
+    if "${elevate[@]}" "$target" "${init_args[@]}"; then
         printf '安装及初始化完成：%s\n请重新登录或重启业务服务以刷新组身份；日志读取权限仍由管理员管理。\n' "$target"
     else
         status=$?

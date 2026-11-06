@@ -42,6 +42,8 @@ rpc.Unhealthy()
 
 同一项目的并行实例应显式提供不同 ID，跨重启复用。多个实例使用 common 会共享逻辑身份；各实例的指标文件路径由接入方分别配置。
 
+Linux 默认日志出口按等级选择四个专用 journal 空间：debug、info/notice、warning、error 及以上。业务继续使用八级日志方法及原身份；主机的独立容量由 `mct-syslogger init` 管理，见[部署说明](journal.md)。
+
 ## 容错初始化
 
 `New(Config) (*Manager, error)` 严格校验配置。需要在配置异常时继续运行，可使用 `SafeNew(Config) *Manager`：

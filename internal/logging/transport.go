@@ -27,7 +27,7 @@ const (
 
 type transport struct {
 	mu            sync.Mutex
-	conn          net.Conn
+	conns         [journalwire.GroupCount]net.Conn
 	protocol      wireProtocol
 	path          string
 	id            identity.Instance
@@ -37,8 +37,12 @@ type transport struct {
 }
 
 func (t *transport) send(ctx context.Context, entry *Entry) error {
+	group := journalwire.DebugGroup
+	if t.path == "" {
+		group = journalwire.GroupForSeverity(uint8(entry.Severity))
+	}
 	t.mu.Lock()
-	conn, protocol, header, closed := t.conn, t.protocol, t.journalHeader, t.closed
+	conn, protocol, header, closed := t.conns[group], t.protocol, t.journalHeader, t.closed
 	t.mu.Unlock()
 	if closed {
 		return context.Canceled
@@ -47,7 +51,7 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 		dialCtx, cancel := context.WithTimeout(ctx, sendTimeout)
 		defer cancel()
 		var err error
-		conn, protocol, err = t.connect(dialCtx)
+		conn, protocol, err = t.connect(dialCtx, group)
 		if err != nil {
 			return err
 		}
@@ -60,7 +64,7 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 			_ = conn.Close()
 			return context.Canceled
 		}
-		t.conn, t.protocol, t.journalHeader = conn, protocol, header
+		t.conns[group], t.protocol, t.journalHeader = conn, protocol, header
 		t.mu.Unlock()
 	}
 	var data []byte
@@ -89,8 +93,8 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 	}
 	if err != nil {
 		t.mu.Lock()
-		if t.conn == conn {
-			t.conn = nil
+		if t.conns[group] == conn {
+			t.conns[group] = nil
 		}
 		t.mu.Unlock()
 		_ = conn.Close()
@@ -98,13 +102,13 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 	return err
 }
 
-// connect 的默认入口固定为专用 journal；显式路径按传统 syslog 协议连接。
-func (t *transport) connect(ctx context.Context) (net.Conn, wireProtocol, error) {
+// connect 按等级组选择原生 journal；显式路径维持单一传统 syslog 入口。
+func (t *transport) connect(ctx context.Context, group journalwire.Group) (net.Conn, wireProtocol, error) {
 	if t.path == "" {
 		if runtime.GOOS != "linux" {
-			return nil, journalNative, fmt.Errorf("syslogger: 默认日志出口需要 Linux 的 %s journal 命名空间；其他平台请配置独立 SyslogSocketPath", journalwire.Namespace)
+			return nil, journalNative, fmt.Errorf("syslogger: 默认日志出口需要 Linux 的 %s journal 命名空间；其他平台请配置独立 SyslogSocketPath", group.Namespace())
 		}
-		conn, err := (&net.Dialer{}).DialContext(ctx, "unixgram", journalwire.SocketPath)
+		conn, err := (&net.Dialer{}).DialContext(ctx, "unixgram", group.SocketPath())
 		return conn, journalNative, err
 	}
 	var lastErr error
@@ -125,10 +129,12 @@ func (t *transport) connect(ctx context.Context) (net.Conn, wireProtocol, error)
 func (t *transport) close() {
 	t.mu.Lock()
 	t.closed = true
-	conn := t.conn
-	t.conn = nil
+	conns := t.conns
+	t.conns = [journalwire.GroupCount]net.Conn{}
 	t.mu.Unlock()
-	if conn != nil {
-		_ = conn.Close()
+	for _, conn := range conns {
+		if conn != nil {
+			_ = conn.Close()
+		}
 	}
 }

@@ -26,6 +26,7 @@ type journalTestEntry struct {
 	Project   string `json:"SYSLOGGER_PROJECT"`
 	Instance  string `json:"SYSLOGGER_INSTANCE_ID"`
 	Component string `json:"SYSLOGGER_COMPONENT"`
+	Namespace string `json:"_NAMESPACE"`
 }
 
 func journalMatchValues(args []string, prefix string) []string {
@@ -53,6 +54,7 @@ func journalTestLines(args []string, entries []journalTestEntry) ([]string, erro
 	var lines []string
 	for _, entry := range entries {
 		fields := map[string]string{
+			"_NAMESPACE":               entry.Namespace,
 			"PRIORITY":                 entry.Priority,
 			journalwire.ProjectField:   entry.Project,
 			journalwire.InstanceField:  entry.Instance,
@@ -100,6 +102,7 @@ func moduleJournalEntry(t *testing.T, message, project, instance, component stri
 		t.Fatal(err)
 	}
 	return journalTestEntry{
+		Namespace: journalwire.GroupForSeverity(uint8(level)).Namespace(),
 		Message:   string(entry.Body),
 		Priority:  strconv.Itoa(int(entry.Severity)),
 		Project:   project,
@@ -378,5 +381,37 @@ func TestIndexedMetadataStillRechecksBody(t *testing.T) {
 	}
 	if output.String() != wanted.Message+"\n" {
 		t.Fatal("原生字段预筛绕过了正文身份复核")
+	}
+}
+
+func TestJournalGroupSelection(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want []string
+	}{
+		{args: []string{"--include-level", "debug"}, want: []string{"mct-syslogger-debug"}},
+		{args: []string{"--include-level", "notice"}, want: []string{"mct-syslogger-info"}},
+		{args: []string{"--include-level", "warning"}, want: []string{"mct-syslogger-warning"}},
+		{args: []string{"-l", "error"}, want: []string{"mct-syslogger-error"}},
+		{args: []string{"-l", "warning"}, want: []string{"mct-syslogger-warning", "mct-syslogger-error"}},
+		{args: []string{"--include-level", "debug", "--include-level", "error"}, want: []string{"mct-syslogger-debug", "mct-syslogger-error"}},
+	} {
+		args := testOptions(t, test.args...).journalArgs()
+		if got := journalMatchValues(args, "_NAMESPACE="); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("空间选择错误: args=%v got=%v want=%v", test.args, got, test.want)
+		}
+	}
+	wanted := moduleJournalEntry(t, "wanted", "project", "main", "rpc", logging.Error)
+	unrelated := wanted
+	unrelated.Namespace = "unrelated"
+	defaultJournal := wanted
+	defaultJournal.Namespace = ""
+	fakeJournalEntries(t, []journalTestEntry{wanted, unrelated, defaultJournal})
+	var output bytes.Buffer
+	if err := query(context.Background(), testOptions(t, "--json", "-n", "0"), &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != wanted.Message+"\n" {
+		t.Fatalf("混入了范围外 namespace: %s", &output)
 	}
 }

@@ -1,4 +1,4 @@
-// Package journalwire 定义 SDK 与 CLI 共用的 journal 命名空间、身份字段和固定消息编码。
+// Package journalwire 定义 SDK、init 与 CLI 共用的四组 journal 入口、身份字段和消息编码。
 package journalwire
 
 import (
@@ -11,10 +11,6 @@ import (
 )
 
 const (
-	// Namespace 是本模块日志流使用的固定 journal 命名空间。
-	Namespace = "mct-syslogger"
-	// SocketPath 是专用 journald 实例的原生数据报入口，由部署方启用。
-	SocketPath = "/run/systemd/journal." + Namespace + "/socket"
 	// ProjectField 保存项目原文，用于独立于规范化系统日志 tag 的身份索引。
 	ProjectField = "SYSLOGGER_PROJECT"
 	// InstanceField 和 ComponentField 将稳定身份交给 journal 原生索引。

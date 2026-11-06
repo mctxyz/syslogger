@@ -8,8 +8,8 @@
 
 ```sh
 sudo mct-syslogger init --user appuser
-# 持久化日志总容量默认 5G，也可以明确指定。
-sudo mct-syslogger init --user appuser --journal-max-use 10G
+# 四个空间默认合计 5G，可独立调整其中一项。
+sudo mct-syslogger init --user appuser --journal-info-max-use 10G
 ```
 
 初始化需要 Linux、systemd 245+ 及 root，完成后重新登录或重启业务服务刷新组身份。首次迁移前先停止旧版写入进程；容量、压缩和管理员配置保护见[部署说明](journal.md)。业务开启目录功能的示例：

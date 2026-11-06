@@ -8,7 +8,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
-	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 type optionName struct {
@@ -176,10 +175,10 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   正常更新可能滞后约 10 分钟，只列出一年内有日志接收活动的组件。
   目录不代表进程存活或 journal 仍有日志；已知名称可直接查询。
   日志默认只查近 1 小时；先扩大范围（-s=-24h -n 0），再减少过滤条件。
-  日志固定读取 %s 命名空间；需要 Linux、systemd 245+、journalctl 和读取权限。
-  权限不足可用 sudo mct-syslogger ...；旧默认日志用普通 journalctl 查。
+  日志固定读取 debug、info/notice、warning、error 及以上四个专用空间。
+  需要 Linux、systemd 245+、journalctl 和读取权限；权限不足可用 sudo mct-syslogger ...。
   查询模式只读；主机初始化由管理员操作，参数与影响先查看：
     mct-syslogger init --help
   安装配置与完整规则见项目 tools/README.md、docs/journal.md。
-`, catalog.Root, journalwire.Namespace)
+`, catalog.Root)
 }

@@ -5,15 +5,23 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
-// DefaultJournalMaxUse 是专用命名空间的默认持久化容量。
-const DefaultJournalMaxUse = "5G"
+// DefaultJournalMaxUse 为 info 分配 2 GiB，其余三组各 1 GiB，默认合计 5 GiB。
+func DefaultJournalMaxUse(group journalwire.Group) string {
+	if group == journalwire.InfoGroup {
+		return "2G"
+	}
+	return "1G"
+}
 
 // Options 仅由 init 子命令提供，运行账户必须明确指定。
 type Options struct {
-	User          string
-	JournalMaxUse string
+	User string
+	// JournalMaxUse 按 journalwire.Group 索引保存各空间的独立容量。
+	JournalMaxUse [journalwire.GroupCount]string
 }
 
 // Validate 在特权操作前检查用户参数和容量，拒绝配置文件注入。
@@ -21,8 +29,10 @@ func (o Options) Validate() error {
 	if o.User == "" || strings.ContainsAny(o.User, "\x00\r\n:/") {
 		return fmt.Errorf("--user 必须指定已存在的程序运行账户")
 	}
-	if _, err := sizeBytes(o.JournalMaxUse); err != nil {
-		return fmt.Errorf("--journal-max-use: %w", err)
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		if _, err := sizeBytes(o.JournalMaxUse[group]); err != nil {
+			return fmt.Errorf("--journal-%s-max-use: %w", group.Name(), err)
+		}
 	}
 	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 func testInitializer(output io.Writer) *initializer {
@@ -215,13 +216,13 @@ fi
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", directory)
-	if err := init.activateJournal(); err == nil {
+	if err := init.activateJournal(journalwire.InfoGroup); err == nil {
 		t.Fatal("假 socket 未就绪仍报告激活成功")
 	}
 	if !strings.Contains(output.String(), "Created symlink for test socket.") {
 		t.Fatalf("丢弃了 systemctl 的链接创建信息: %s", &output)
 	}
-	if !strings.Contains(output.String(), "systemd-journald@mct-syslogger.service") || !strings.Contains(output.String(), `"restart"`) {
+	if !strings.Contains(output.String(), "systemd-journald@mct-syslogger-info.service") || !strings.Contains(output.String(), `"restart"`) {
 		t.Fatalf("缺少实际重启命令: %s", &output)
 	}
 	if strings.Contains(output.String(), "[检查日志入口]") || strings.Contains(output.String(), "初始化完成") {
