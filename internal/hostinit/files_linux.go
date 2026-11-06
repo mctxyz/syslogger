@@ -1,41 +1,35 @@
 package hostinit
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
 	"golang.org/x/sys/unix"
 )
 
-// openDirectory 拒绝目录入口的符号链接，后续迁移通过目录 fd 定位子对象。
-func (init *initializer) openDirectory(path string, create bool, mode os.FileMode) (*os.File, error) {
-	created := false
-	if create {
-		err := os.Mkdir(path, mode)
-		if err != nil && !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-		if err == nil {
-			created = true
-			init.logger.Printf("[创建目录] %q", path)
-		}
+// openDirectory 拒绝目录入口的符号链接，并返回本次是否创建了目录。
+func (init *initializer) openDirectory(path string, mode os.FileMode) (*os.File, bool, error) {
+	err := os.Mkdir(path, mode)
+	if err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, false, err
+	}
+	created := err == nil
+	if created {
+		init.logger.Printf("[创建目录] %q", path)
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("打开目录 %s: %w", path, err)
+		return nil, created, fmt.Errorf("打开目录 %s: %w", path, err)
 	}
-	if create && !created {
+	if !created {
 		init.logger.Printf("[复用目录] %q", path)
 	}
-	return os.NewFile(uintptr(fd), path), nil
+	return os.NewFile(uintptr(fd), path), created, nil
 }
 
-// inspect 拒绝特殊文件、多重硬链接及 ACL，防止特权迁移影响受管目录外对象。
+// inspect 拒绝特殊文件、多重硬链接及 ACL，保护初始化管理的目录和配置文件。
 func inspect(file *os.File, directory bool) (unix.Stat_t, error) {
 	var stat unix.Stat_t
 	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
@@ -64,82 +58,28 @@ func inspect(file *os.File, directory bool) (unix.Stat_t, error) {
 }
 
 func (init *initializer) prepareCatalog(path string, uid, gid int) error {
-	root, err := init.openDirectory(path, true, catalog.DirectoryMode)
+	root, created, err := init.openDirectory(path, catalog.DirectoryMode)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	return init.migrateDirectory(root, uid, gid, true)
-}
-
-// migrateDirectory 保留文件内容及锁 inode，先收紧目录再按 fd 迁移受管子对象。
-func (init *initializer) migrateDirectory(directory *os.File, uid, gid int, root bool) error {
-	if _, err := inspect(directory, true); err != nil {
-		return err
-	}
-	if err := directory.Chown(uid, gid); err != nil {
-		return err
-	}
-	init.logger.Printf("[设置目录属主] %q UID=%d GID=%d", directory.Name(), uid, gid)
-	if err := directory.Chmod(catalog.DirectoryMode); err != nil {
-		return err
-	}
-	init.logger.Printf("[设置目录权限] %q mode=%04o", directory.Name(), catalog.DirectoryMode.Perm())
-	names, err := directory.Readdirnames(-1)
+	stat, err := inspect(root, true)
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		if root && !digestName(name) {
-			return fmt.Errorf("名称根目录存在非项目对象 %s，请管理员先处理", filepath.Join(directory.Name(), name))
+	if !created {
+		if stat.Uid != uint32(uid) || stat.Gid != uint32(gid) || stat.Mode&07777 != uint32(catalog.DirectoryMode.Perm()) {
+			return fmt.Errorf("名称根目录 %s 需要 UID=%d GID=%d 和 %04o 权限，当前 UID=%d GID=%d 权限=%04o，请管理员人工处理后重试", path, uid, gid, catalog.DirectoryMode.Perm(), stat.Uid, stat.Gid, stat.Mode&07777)
 		}
-		instanceFile := strings.HasSuffix(name, ".json") && digestName(strings.TrimSuffix(name, ".json"))
-		temporaryFile := strings.HasPrefix(name, ".catalog-")
-		if !root && name != catalog.LockName && !temporaryFile && !instanceFile {
-			return fmt.Errorf("项目目录存在非受管对象 %s，请管理员先处理", filepath.Join(directory.Name(), name))
-		}
-		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
-		if root {
-			flags |= unix.O_DIRECTORY
-		}
-		fd, err := unix.Openat(int(directory.Fd()), name, flags, 0)
-		if err != nil {
-			return fmt.Errorf("打开受管对象 %s: %w", filepath.Join(directory.Name(), name), err)
-		}
-		file := os.NewFile(uintptr(fd), filepath.Join(directory.Name(), name))
-		if root {
-			init.logger.Printf("[复用目录] %q", file.Name())
-			err = init.migrateDirectory(file, uid, gid, false)
-		} else {
-			_, err = inspect(file, false)
-			if err == nil {
-				err = file.Chown(uid, gid)
-				if err == nil {
-					init.logger.Printf("[设置文件属主] %q UID=%d GID=%d", file.Name(), uid, gid)
-				}
-			}
-			if err == nil {
-				err = file.Chmod(catalog.FileMode)
-				if err == nil {
-					init.logger.Printf("[设置文件权限] %q mode=%04o", file.Name(), catalog.FileMode)
-				}
-			}
-		}
-		closeErr := file.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
-		}
+		return nil
 	}
+	if err := root.Chown(uid, gid); err != nil {
+		return err
+	}
+	init.logger.Printf("[设置目录属主] %q UID=%d GID=%d", path, uid, gid)
+	if err := root.Chmod(catalog.DirectoryMode); err != nil {
+		return err
+	}
+	init.logger.Printf("[设置目录权限] %q mode=%04o", path, catalog.DirectoryMode.Perm())
 	return nil
-}
-
-func digestName(name string) bool {
-	if len(name) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(name)
-	return err == nil
 }

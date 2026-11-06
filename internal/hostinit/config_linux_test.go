@@ -38,43 +38,6 @@ func TestConfigCommentsAndSyntax(t *testing.T) {
 	}
 }
 
-func TestCleanupRevealsLowerPriorityMain(t *testing.T) {
-	root := t.TempDir()
-	etc := filepath.Join(root, "etc")
-	run := filepath.Join(root, "run")
-	if err := os.MkdirAll(run, 0755); err != nil {
-		t.Fatal(err)
-	}
-	main := filepath.Join(etc, journalBaseName(journalwire.DebugGroup))
-	if err := testInitializer(io.Discard).writeJournalConfig(main, journalConfig("5G")); err != nil {
-		t.Fatal(err)
-	}
-	if err := testInitializer(io.Discard).writeJournalConfig(filepath.Join(main+".d", configName), journalConfig("5G")); err != nil {
-		t.Fatal(err)
-	}
-	exposed := filepath.Join(run, journalBaseName(journalwire.DebugGroup))
-	if err := os.WriteFile(exposed, []byte("[broken\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	sources, err := journalConfigSources([]string{etc, run}, 256, journalwire.DebugGroup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err != nil {
-		t.Fatal(err)
-	}
-	if err := testInitializer(io.Discard).removeManagedConfig(main); err != nil {
-		t.Fatal(err)
-	}
-	sources, err = journalConfigSources([]string{etc, run}, 256, journalwire.DebugGroup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := checkJournalConfig(sources, journalSettings("5G"), journalwire.DebugGroup); err == nil || !strings.Contains(err.Error(), exposed) {
-		t.Fatalf("清理后遗漏了新显露的主文件: %v", err)
-	}
-}
-
 func TestConfigSourceVersionsAndPrecedence(t *testing.T) {
 	root := t.TempDir()
 	var directories []string
@@ -136,40 +99,6 @@ func TestConfigSourceVersionsAndPrecedence(t *testing.T) {
 	}
 	if len(newSources) != len(oldSources)+1 || newSources[0].path != filepath.Join(directories[1], base) {
 		t.Fatal("256 主文件目录搜索不符合版本契约")
-	}
-}
-
-func TestManagedConfigVersionMigration(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "systemd")
-	main := filepath.Join(directory, journalBaseName(journalwire.DebugGroup))
-	dropin := filepath.Join(main+".d", configName)
-	if err := testInitializer(io.Discard).writeJournalConfig(main, journalConfig("5G")); err != nil {
-		t.Fatal(err)
-	}
-	if err := testInitializer(io.Discard).writeJournalConfig(dropin, journalConfig("10G")); err != nil {
-		t.Fatal(err)
-	}
-	if err := testInitializer(io.Discard).removeManagedConfig(main); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(main); !os.IsNotExist(err) {
-		t.Fatalf("升级后旧受管主文件未清理: %v", err)
-	}
-	if err := os.WriteFile(main, []byte("[Journal]\nCompress=no\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := testInitializer(io.Discard).removeManagedConfig(main); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(main)
-	if err != nil || !strings.Contains(string(data), "Compress=no") {
-		t.Fatalf("升级清理删除了管理员配置: %s %v", data, err)
-	}
-	if err := testInitializer(io.Discard).removeManagedConfig(dropin); err != nil {
-		t.Fatal(err)
-	}
-	if err := testInitializer(io.Discard).removeManagedConfig(dropin); err != nil {
-		t.Fatalf("中断后的重复清理不能恢复: %v", err)
 	}
 }
 

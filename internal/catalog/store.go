@@ -1,9 +1,11 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,27 +43,34 @@ func (s Store) write(instance Instance) error {
 	return os.Rename(temporary, path)
 }
 
-// CheckRoot 复用管理员准备的根目录；缺失或不安全时交由初始化命令处理。
+// CheckRoot 复用已经初始化的根目录，缺失时提示通过初始化命令创建。
 func (s Store) CheckRoot() error {
-	return checkDirectory(s.Root)
+	err := checkDirectory(s.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("名称根目录缺失，请运行 mct-syslogger init 创建: %w", err)
+	}
+	return err
 }
 
 func checkDirectory(path string) error {
 	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("名称目录 %s 不存在: %w", path, err)
+	}
 	if err != nil {
-		return fmt.Errorf("名称目录 %s 不可用，请运行 mct-syslogger init: %w", path, err)
+		return fmt.Errorf("名称目录 %s 不可用，请管理员人工处理: %w", path, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("名称目录 %s 不是普通目录", path)
+		return fmt.Errorf("名称目录 %s 不是普通目录，请管理员人工处理", path)
 	}
-	// 根目录由管理员初始化为固定账户持有，权限漂移交给初始化命令修复。
+	// 已有对象的元数据由管理员处理，SDK 只维护符合当前规范的目录。
 	if runtime.GOOS != "windows" && info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != DirectoryMode {
-		return fmt.Errorf("名称目录 %s 需要 %04o 权限及 %s 所有者，请运行 mct-syslogger init: %w", path, DirectoryMode, User, os.ErrPermission)
+		return fmt.Errorf("名称目录 %s 需要 %04o 权限及 %s 所有者，请管理员人工处理: %w", path, DirectoryMode, User, os.ErrPermission)
 	}
 	return nil
 }
 
-// projectDirectory 为新项目继承初始化根目录的所有者，既有目录继续由 init 迁移。
+// projectDirectory 为新项目继承根目录的所有者，复用时核验当前目录规范。
 func (s Store) projectDirectory(path string) error {
 	err := os.Mkdir(path, DirectoryMode)
 	if err == nil {
@@ -134,7 +143,16 @@ func readInstance(path string) (Instance, error) {
 		return Instance{}, err
 	}
 	var instance Instance
-	if err := json.Unmarshal(data, &instance); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&instance); err != nil {
+		return Instance{}, fmt.Errorf("读取日志目录 %s: %w", path, err)
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("必须仅包含一个 JSON 对象")
+		}
 		return Instance{}, fmt.Errorf("读取日志目录 %s: %w", path, err)
 	}
 	if instance.Project == "" || instance.InstanceID == "" {

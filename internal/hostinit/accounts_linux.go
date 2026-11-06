@@ -8,7 +8,7 @@ import (
 	"github.com/mctxyz/syslogger/internal/catalog"
 )
 
-// prepareAccount 解析已有 app 账户的数值身份，目录迁移不改变系统账户配置。
+// prepareAccount 解析已有 app 账户的数值身份，资源创建不改变系统账户配置。
 func (init *initializer) prepareAccount() (int, int, error) {
 	account, err := user.Lookup(catalog.User)
 	if err != nil {

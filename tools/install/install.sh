@@ -160,9 +160,9 @@ main() {
         printf 'journal %s 容量：%s\n' "${groups[$index]}" "${capacities[$index]}"
     done
     printf '%s\n' \
-        '将更新上述命令和文档，并以 root 运行 init：将名称目录及文件迁移给 app、应用配置、重启四个专用 journald 实例。' \
+        '将更新上述命令和文档，并以 root 运行 init：创建或核验 app 名称根目录、应用配置、重启四个专用 journald 实例。' \
         '需要 Linux、systemd 245+ 及 init 所需系统工具；账户、权限和容量规则由 init 校验。' \
-        '首次迁移前请停止旧版业务进程；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
+        '历史目录和配置由部署方手动处理，清理前先停止相关写入进程；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
     prompt '确认安装并初始化？[y/N]：' 'n'
     case "$REPLY" in
         y|Y|yes|YES)

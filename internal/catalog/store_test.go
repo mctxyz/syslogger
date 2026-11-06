@@ -567,42 +567,48 @@ func TestHourlyMergeWithStaleCallerTime(t *testing.T) {
 	}
 }
 
-func TestLegacyTotalIsNotMigratedToHourlyCounts(t *testing.T) {
+func TestCatalogSchemaAndSingleObject(t *testing.T) {
 	store := Store{Root: preparedRoot(t)}
 	now := time.Now().UTC()
-	createdAt := now.Add(-24 * time.Hour)
-	path := store.Path("p", "i")
-	if err := store.projectDirectory(filepath.Dir(path)); err != nil {
-		t.Fatal(err)
-	}
-	legacy := map[string]any{
-		"project": "p", "instance_id": "i", "created_at": createdAt,
-		"components": []map[string]any{{
-			"name": "rpc", "description": "旧身份", "created_at": createdAt,
-			"last_active_at": createdAt, "log_count": uint64(987654321),
-		}},
-	}
-	data, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, FileMode); err != nil {
-		t.Fatal(err)
-	}
 	delta := activeFixture(Instance{Project: "p", InstanceID: "i", Components: []Component{{Name: "rpc"}}}, now)
 	if err := store.Merge(delta, now); err != nil {
 		t.Fatal(err)
 	}
+	path := store.Path("p", "i")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, []byte(" \t\r\n")...), FileMode); err != nil {
+		t.Fatal(err)
+	}
 	instances, err := store.Read()
 	if err != nil || len(instances) != 1 || len(instances[0].Components) != 1 {
-		t.Fatalf("旧身份未正常延续：%+v, %v", instances, err)
+		t.Fatalf("当前清单格式及尾随空白未正常读取: %+v %v", instances, err)
 	}
-	component := instances[0].Components[0]
-	if !component.CreatedAt.Equal(createdAt) || componentCount(component) != 1 || !component.LogCounts[hourly.Hours-1].StartTime.Equal(hourly.Start(now)) {
-		t.Fatalf("小时统计错误继承了旧累计或重置了身份时间：%+v", component)
-	}
-	data, err = os.ReadFile(path)
-	if err != nil || strings.Contains(string(data), `"log_count"`) || !strings.Contains(string(data), `"log_counts"`) {
-		t.Fatalf("新文件仍保留旧累计字段：%s, %v", data, err)
+	for name, content := range map[string]string{
+		"unknown-root-field":      `{"project":"p","instance_id":"i","unsupported":true}`,
+		"unknown-component-field": `{"project":"p","instance_id":"i","components":[{"name":"rpc","log_count":10}]}`,
+		"multiple-objects":        string(data) + "{}",
+		"malformed-trailing":      string(data) + "{",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(content), FileMode); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Read(); err == nil {
+				t.Fatal("读取时接受了不符合当前结构的清单")
+			}
+			if err := store.Merge(delta, now); err == nil {
+				t.Fatal("合并时转换了不符合当前结构的清单")
+			}
+			if err := store.Prune(now); err == nil {
+				t.Fatal("清理时接受了不符合当前结构的清单")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != content {
+				t.Fatalf("拒绝操作后清单被改写: %q %v", after, err)
+			}
+		})
 	}
 }

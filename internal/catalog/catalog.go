@@ -23,7 +23,7 @@ const DirectoryMode os.FileMode = 0755
 // FileMode 允许所有者维护清单和稳定锁，其余账户只读。
 const FileMode = 0644
 
-// LockName 是项目级稳定锁文件名，发布和权限迁移共用此路径约定。
+// LockName 是项目级稳定锁文件名，发布和清理共用此路径约定。
 const LockName = ".catalog.lock"
 
 // SyncInterval 是 SDK 批量同步周期，也是物理清理为未同步活动保留的宽限窗口。

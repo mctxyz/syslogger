@@ -25,7 +25,7 @@ func (s Store) lockProject(directory string) (*flock.Flock, error) {
 			return nil, statErr
 		}
 		if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0002 != 0) {
-			return nil, fmt.Errorf("项目锁 %s 需要通过 mct-syslogger init 修复权限", path)
+			return nil, fmt.Errorf("项目锁 %s 的类型或权限不安全，请管理员人工处理", path)
 		}
 		file, err = os.OpenFile(path, os.O_RDWR, 0)
 	}

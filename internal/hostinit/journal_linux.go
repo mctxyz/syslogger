@@ -46,7 +46,7 @@ func journalConfig(maxUse string) string {
 
 // writeJournalConfig 只原子替换工具自己生成的片段，保留管理员独立配置。
 func (init *initializer) writeJournalConfig(path, content string) error {
-	directory, err := init.openConfigDirectory(filepath.Dir(path), true)
+	directory, err := init.openConfigDirectory(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
@@ -85,8 +85,8 @@ func (init *initializer) writeJournalConfig(path, content string) error {
 	return nil
 }
 
-func (init *initializer) openConfigDirectory(path string, create bool) (*os.File, error) {
-	directory, err := init.openDirectory(path, create, 0755)
+func (init *initializer) openConfigDirectory(path string) (*os.File, error) {
+	directory, _, err := init.openDirectory(path, 0755)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (init *initializer) openConfigDirectory(path string, create bool) (*os.File
 	return directory, nil
 }
 
-// managedConfigFile 通过受保护目录 fd 检查文件归属，供写入和版本迁移清理共用。
+// managedConfigFile 通过受保护目录 fd 识别工具拥有的配置，供幂等原子更新使用。
 func managedConfigFile(directory *os.File, name string) (bool, bool, error) {
 	fd, err := unix.Openat(int(directory.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if errors.Is(err, unix.ENOENT) {
@@ -126,61 +126,16 @@ func managedConfigFile(directory *os.File, name string) (bool, bool, error) {
 	return true, strings.HasPrefix(string(data), configMarker), nil
 }
 
-func (init *initializer) removeManagedConfig(path string) error {
-	directory, err := init.openConfigDirectory(filepath.Dir(path), false)
-	if errors.Is(err, unix.ENOENT) {
-		init.logger.Printf("[无需清理] %q 不存在", path)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	found, owned, err := managedConfigFile(directory, filepath.Base(path))
-	if err != nil {
-		return err
-	}
-	if !found {
-		init.logger.Printf("[无需清理] %q 不存在", path)
-		return nil
-	}
-	if !owned {
-		init.logger.Printf("[保留配置] %q 非本工具受管文件", path)
-		return nil
-	}
-	if err := unix.Unlinkat(int(directory.Fd()), filepath.Base(path), 0); err != nil {
-		return err
-	}
-	init.logger.Printf("[清理旧配置] %q", path)
-	return nil
-}
-
 func (init *initializer) prepareJournal(group journalwire.Group, maxUse string, version int) error {
-	mainPath := filepath.Join("/etc/systemd", journalBaseName(group))
-	dropinPath := filepath.Join(mainPath+".d", configName)
-	target, previous := dropinPath, mainPath
-	if version < 248 {
-		target, previous = mainPath, dropinPath
+	target := filepath.Join("/etc/systemd", journalBaseName(group))
+	if version >= 248 {
+		target = filepath.Join(target+".d", configName)
 	}
 	init.logger.Printf("[配置路径] systemd=%d 使用 %q", version, target)
 	if err := init.writeJournalConfig(target, journalConfig(maxUse)); err != nil {
 		return err
 	}
 	sources, err := journalConfigSources([]string{"/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"}, version, group)
-	if err != nil {
-		return err
-	}
-	for _, source := range sources {
-		init.logger.Printf("[读取配置] %q", source.path)
-	}
-	if err := checkJournalConfig(sources, journalSettings(maxUse), group); err != nil {
-		return err
-	}
-	if err := init.removeManagedConfig(previous); err != nil {
-		return err
-	}
-	// 删除旧主文件可能使较低优先级主文件显露，重启前核验最终实际集合。
-	sources, err = journalConfigSources([]string{"/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"}, version, group)
 	if err != nil {
 		return err
 	}

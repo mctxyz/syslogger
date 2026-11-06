@@ -42,16 +42,19 @@ func TestFixedAccountLookup(t *testing.T) {
 	}
 }
 
-func TestCatalogMigrationPreservesDataAndLock(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "catalog")
+func TestCatalogReuseLeavesContentsUntouched(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, catalog.DirectoryMode); err != nil {
+		t.Fatal(err)
+	}
 	project := filepath.Join(root, strings.Repeat("a", 64))
-	if err := os.MkdirAll(project, 0777); err != nil {
+	if err := os.Mkdir(project, 0700); err != nil {
 		t.Fatal(err)
 	}
 	lock := filepath.Join(project, ".catalog.lock")
 	dataPath := filepath.Join(project, strings.Repeat("b", 64)+".json")
 	for _, path := range []string{lock, dataPath} {
-		if err := os.WriteFile(path, []byte("保留"), 0666); err != nil {
+		if err := os.WriteFile(path, []byte("保留"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -64,45 +67,44 @@ func TestCatalogMigrationPreservesDataAndLock(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for path, mode := range map[string]os.FileMode{root: catalog.DirectoryMode, project: catalog.DirectoryMode, lock: catalog.FileMode, dataPath: catalog.FileMode} {
+	for path, mode := range map[string]os.FileMode{root: catalog.DirectoryMode, project: 0700, lock: 0600, dataPath: 0600} {
 		info, err := os.Stat(path)
 		if err != nil || info.Mode()&(os.ModePerm|os.ModeSetgid) != mode {
-			t.Fatalf("迁移权限错误: %s %v %v", path, info, err)
+			t.Fatalf("重复初始化改写了既有内容权限: %s %v %v", path, info, err)
 		}
 	}
 	after, err := os.Stat(lock)
 	if err != nil || !os.SameFile(before, after) {
-		t.Fatalf("迁移替换了稳定锁 inode: %v", err)
+		t.Fatalf("重复初始化替换了稳定锁 inode: %v", err)
 	}
 	data, err := os.ReadFile(dataPath)
 	if err != nil || string(data) != "保留" {
-		t.Fatalf("迁移改变了数据: %q %v", data, err)
+		t.Fatalf("重复初始化改变了数据: %q %v", data, err)
 	}
 }
 
-func TestMigrationRejectsLinksAndACL(t *testing.T) {
-	for _, kind := range []string{"symlink", "hardlink", "acl", "default-acl"} {
+func TestCatalogRejectsUnsafeRoot(t *testing.T) {
+	for _, kind := range []string{"symlink", "file", "acl", "default-acl"} {
 		t.Run(kind, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "catalog")
-			project := filepath.Join(root, strings.Repeat("a", 64))
-			if err := os.MkdirAll(project, 0755); err != nil {
+			outside := t.TempDir()
+			before, err := os.Stat(outside)
+			if err != nil {
 				t.Fatal(err)
 			}
-			outside := filepath.Join(t.TempDir(), "outside")
-			if err := os.WriteFile(outside, []byte("范围外"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(project, ".catalog.lock")
 			switch kind {
 			case "symlink":
-				if err := os.Symlink(outside, path); err != nil {
+				if err := os.Symlink(outside, root); err != nil {
 					t.Fatal(err)
 				}
-			case "hardlink":
-				if err := os.Link(outside, path); err != nil {
+			case "file":
+				if err := os.WriteFile(root, []byte("保留"), 0600); err != nil {
 					t.Fatal(err)
 				}
 			default:
+				if err := os.Mkdir(root, 0755); err != nil {
+					t.Fatal(err)
+				}
 				name := "system.posix_acl_access"
 				if kind == "default-acl" {
 					name = "system.posix_acl_default"
@@ -119,20 +121,38 @@ func TestMigrationRejectsLinksAndACL(t *testing.T) {
 					binary.LittleEndian.PutUint16(acl[offset+2:], entry.perm)
 					binary.LittleEndian.PutUint32(acl[offset+4:], entry.id)
 				}
-				if err := unix.Setxattr(project, name, acl, 0); errors.Is(err, unix.ENOTSUP) {
+				if err := unix.Setxattr(root, name, acl, 0); errors.Is(err, unix.ENOTSUP) {
 					t.Skip("测试文件系统不支持 POSIX ACL")
 				} else if err != nil {
 					t.Fatal(err)
 				}
 			}
 			if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err == nil {
-				t.Fatal("未拒绝越界链接或 ACL")
+				t.Fatal("未拒绝不安全的名称根目录")
+			} else if strings.Contains(kind, "acl") && !strings.Contains(err.Error(), "ACL") {
+				t.Fatalf("未实际检查根目录 ACL: %v", err)
 			}
 			info, err := os.Stat(outside)
-			if err != nil || info.Mode().Perm() != 0600 {
+			if err != nil || info.Mode() != before.Mode() {
 				t.Fatalf("改变了范围外对象权限: %v %v", info, err)
 			}
 		})
+	}
+}
+
+func TestCatalogRejectsExistingPermissionDrift(t *testing.T) {
+	for _, mode := range []os.FileMode{0700, 0775, os.ModeSetgid | 0755, os.ModeSticky | 0755} {
+		root := t.TempDir()
+		if err := os.Chmod(root, mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err == nil {
+			t.Fatal("不符合当前权限的已有根目录被自动修复")
+		}
+		info, err := os.Stat(root)
+		if err != nil || info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != mode {
+			t.Fatalf("改变了已有根目录的权限: %v %v", info, err)
+		}
 	}
 }
 

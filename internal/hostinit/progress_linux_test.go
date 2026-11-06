@@ -52,57 +52,12 @@ func TestDirectoryProgressMatchesActualCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	output.Reset()
-	if directory, err := init.openDirectory(file, true, 0755); err == nil {
+	if directory, _, err := init.openDirectory(file, 0755); err == nil {
 		directory.Close()
 		t.Fatal("将普通文件作为目录打开")
 	}
 	if strings.Contains(output.String(), "[复用目录]") || strings.Contains(output.String(), "[创建目录]") {
 		t.Fatalf("打开失败仍声称目录可复用: %s", &output)
-	}
-}
-
-func TestCatalogProgressNamesEachManagedObject(t *testing.T) {
-	var output bytes.Buffer
-	init := testInitializer(&output)
-	root := t.TempDir()
-	project := filepath.Join(root, strings.Repeat("a", 64))
-	if err := os.Mkdir(project, 0777); err != nil {
-		t.Fatal(err)
-	}
-	lock := filepath.Join(project, catalog.LockName)
-	dataPath := filepath.Join(project, strings.Repeat("b", 64)+".json")
-	for _, path := range []string{lock, dataPath} {
-		if err := os.WriteFile(path, []byte("保留内容"), 0666); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before, err := os.Stat(lock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := init.prepareCatalog(root, os.Geteuid(), os.Getegid()); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{root, project} {
-		if !strings.Contains(output.String(), fmt.Sprintf("[设置目录权限] %q mode=0755", path)) {
-			t.Fatalf("缺少目录的设置结果: %s", path)
-		}
-	}
-	for _, path := range []string{lock, dataPath} {
-		if !strings.Contains(output.String(), fmt.Sprintf("[设置文件属主] %q UID=%d GID=%d", path, os.Geteuid(), os.Getegid())) {
-			t.Fatalf("缺少文件的属主设置: %s", path)
-		}
-		if !strings.Contains(output.String(), fmt.Sprintf("[设置文件权限] %q mode=0644", path)) {
-			t.Fatalf("缺少文件的权限设置: %s", path)
-		}
-	}
-	after, err := os.Stat(lock)
-	if err != nil || !os.SameFile(before, after) {
-		t.Fatalf("增加输出后替换了锁 inode: %v", err)
-	}
-	data, err := os.ReadFile(dataPath)
-	if err != nil || string(data) != "保留内容" {
-		t.Fatalf("增加输出后改变了目录内容: %q, %v", data, err)
 	}
 }
 
@@ -127,30 +82,9 @@ func TestConfigProgressDistinguishesActualActions(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), "SystemMaxUse=10G") {
 		t.Fatalf("配置未实际更新: %s, %v", data, err)
 	}
-	output.Reset()
-	if err := init.removeManagedConfig(path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) || !strings.Contains(output.String(), fmt.Sprintf("[清理旧配置] %q", path)) {
-		t.Fatalf("清理结果与输出不一致: %v, %s", err, &output)
-	}
-	output.Reset()
-	if err := init.removeManagedConfig(path); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(output.String(), "[清理旧配置]") || !strings.Contains(output.String(), "[无需清理]") {
-		t.Fatalf("不存在的文件误报为已删除: %s", &output)
-	}
 	admin := "[Journal]\nCompress=no\n"
 	if err := os.WriteFile(path, []byte(admin), 0644); err != nil {
 		t.Fatal(err)
-	}
-	output.Reset()
-	if err := init.removeManagedConfig(path); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), fmt.Sprintf("[保留配置] %q", path)) || strings.Contains(output.String(), "[清理旧配置]") {
-		t.Fatalf("管理员文件的保留状态不正确: %s", &output)
 	}
 	output.Reset()
 	if err := init.writeJournalConfig(path, journalConfig("5G")); err == nil {

@@ -15,9 +15,9 @@ Go 1.23 本机结构化日志与组件健康状态库，配套 `mct-syslogger` �
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash'
 ```
 
-脚本下载并校验最新 Release，确认候选支持四空间参数后，询问**安装前缀**（默认 `/usr/local`）、**已有本地运行账户**（必填）和 **四个 journal 空间的持久化容量**（依次默认 `1G/2G/1G/1G`），确认后安装并执行 `init`。命令默认安装到 `/usr/local/bin/mct-syslogger`。
+脚本下载并校验最新 Release，检查参数接口后，询问**安装前缀**（默认 `/usr/local`）和 **四个 journal 空间的持久化容量**（依次默认 `1G/2G/1G/1G`），确认后安装并执行 `init`。主机须已有本机 `app` 账户，命令默认安装到 `/usr/local/bin/mct-syslogger`。
 
-初始化会调整目录权限并重启四个专用 journald 实例。首次权限迁移前停止旧版业务进程，完成后重新登录或重启业务服务；缩小容量可能清理对应空间的旧归档，失败时已完成步骤保留。旧单空间的切换和手动彻底清理见[迁移说明](docs/journal.md#升级与手动清理旧空间)。
+初始化创建或核验 `app` 持有的名称根目录，并重启四个专用 journald 实例。已有目录元数据不符合规范时须人工处理；历史内容由部署方手动清理，清理前先停止相关写入进程。缩小容量可能清理对应空间的旧归档，失败时已完成步骤保留。旧单空间的手动清理见[部署说明](docs/journal.md#升级与手动清理旧空间)。
 
 源码中可运行 `bash tools/install/install.sh`，帮助使用 `bash tools/install/install.sh --help`。依赖、手工下载和完整安装说明见 [工具文档](tools/README.md#release-下载与安装)。
 
@@ -75,7 +75,7 @@ mct-syslogger -p myapp -i main -s now -f
 | [日志发送](docs/logging.md) | 日志格式、协议、队列、失败处理、同步日志 |
 | [名称目录](docs/catalog.md) | 清单结构、权限、每小时接收量、保留和清理 |
 | [健康与指标](docs/metrics.md) | 状态、队满降级、共享 Registry、HTTP 与文件出口 |
-| [主机部署](docs/journal.md) | init、专用 journal、容量、权限和迁移 |
+| [主机部署](docs/journal.md) | init、专用 journal、容量、权限和手动清理 |
 | [命令工具](tools/README.md) | 安装、名称发现、查询参数、性能诊断、CI 发布 |
 
 ## 开发验证
