@@ -87,19 +87,23 @@ bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogg
 
 [CI 工作流](https://github.com/mctxyz/syslogger/blob/main/.github/workflows/ci.yml) 在面向 `main` 的 PR、`main` 推送及任意 tag 推送时运行格式、依赖一致性、`go vet` 和全量 race 测试。工具链固定为 Go 1.23.12，并通过 `GOTOOLCHAIN=local` 使用该版本。
 
-tag 的检查通过后，工作流使用 `CGO_ENABLED=0` 编译 Linux amd64、arm64 工具，打包并生成校验文件，再创建对应 tag 的 GitHub Release、自动生成发布说明并上传上述三个资产。已有 Release 会补充或更新同名资产；启用不可变发布后，GitHub 会拒绝覆盖已锁定的资产，应使用新 tag 发布新版本。工作流需要包含在推送的 tag 所指提交中。
+tag 的检查通过后，工作流使用 `CGO_ENABLED=0` 编译 Linux amd64、arm64 工具，通过 Go 链接参数 `-X main.version=$GITHUB_REF_NAME` 将触发发布的 tag 写入二进制，并校验 amd64 程序的 `--version` 输出；随后打包并生成校验文件，再创建对应 tag 的 GitHub Release、自动生成发布说明并上传上述三个资产。已有 Release 会补充或更新同名资产；启用不可变发布后，GitHub 会拒绝覆盖已锁定的资产，应使用新 tag 发布新版本。工作流需要包含在推送的 tag 所指提交中。
 
 发布采用仓库内置的 `GITHUB_TOKEN`，只有发布任务获得 `contents: write`，无需配置额外 PAT。仓库需允许 GitHub Actions 运行及使用工作流中的 Actions；PR 只执行只读检查。工作流复用官方 checkout、setup-go、artifact Actions 和 [action-gh-release v3.0.3](https://github.com/softprops/action-gh-release/tree/v3.0.3)，均固定到 commit SHA。维护者在完成代码推送后，推送版本 tag 即可触发发布。
 
 ## 运行与快捷命令
 
-在仓库目录使用 Go 1.23+ 编译并运行；当前验证工具链为 Go 1.23.12：
+在仓库目录使用 Go 1.23+ 编译并运行；当前验证工具链为 Go 1.23.12。本地构建用 Git 自动取得版本描述并写入二进制：
 
 ```sh
-go build -o tools/bin/mct-syslogger ./tools/mct-syslogger
+version=$(git describe --tags --always --dirty)
+go build -ldflags "-X main.version=$version" -o tools/bin/mct-syslogger ./tools/mct-syslogger
+./tools/bin/mct-syslogger --version
 ./tools/bin/mct-syslogger --help
 ./tools/bin/mct-syslogger --project example-project --instance-id example-instance --component example-component
 ```
+
+`--version` 输出 `mct-syslogger <版本>` 后退出，无需 journalctl、运行时 Git 或管理员权限。Release 版本直接显示发布 tag；本地位于 tag 且工作区干净时也直接显示 tag，其余情况使用最近 tag、提交距离和短提交号，工作区有已跟踪改动时附加 `-dirty`，没有 tag 时使用短提交号。普通 `go build` 未注入版本时显示 `dev`。
 
 可以在 shell 配置中添加别名（替换为实际仓库绝对路径）：
 

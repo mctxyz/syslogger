@@ -13,6 +13,9 @@ import (
 	"github.com/mctxyz/syslogger/internal/catalog"
 )
 
+// version 由发布构建通过 -ldflags -X main.version 注入 tag，普通源码构建标记为 dev。
+var version = "dev"
+
 func mainCode() int {
 	if len(os.Args) > 1 && os.Args[1] == "init" {
 		return initCode(os.Args[2:])
@@ -27,6 +30,13 @@ func mainCode() int {
 	}
 	// 下游管道关闭后通过写入错误完成收尾，目录和日志查询采用一致的退出语义。
 	signal.Ignore(syscall.SIGPIPE)
+	if opts.version {
+		if _, err := fmt.Fprintf(os.Stdout, "mct-syslogger %s\n", version); err != nil {
+			fmt.Fprintln(os.Stderr, "mct-syslogger:", err)
+			return 1
+		}
+		return 0
+	}
 	if opts.list {
 		if err := showCatalog(catalog.Store{Root: catalog.Root}, opts, os.Stdout); err != nil {
 			if errors.Is(err, syscall.EPIPE) {

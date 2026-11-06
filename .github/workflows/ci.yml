@@ -64,12 +64,13 @@ jobs:
             package_dir="$RUNNER_TEMP/$name"
             mkdir -p "$package_dir/tools" "$package_dir/docs"
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
-              -mod=readonly -trimpath -ldflags='-s -w' \
+              -mod=readonly -trimpath -ldflags="-s -w -X main.version=$GITHUB_REF_NAME" \
               -o "$package_dir/mct-syslogger" ./tools/mct-syslogger
             cp tools/README.md tools/THIRD_PARTY_NOTICES.md "$package_dir/tools/"
             cp docs/journal.md "$package_dir/docs/"
             tar -C "$RUNNER_TEMP" -czf "dist/$name.tar.gz" "$name"
           done
+          test "$("$RUNNER_TEMP/mct-syslogger_linux_amd64/mct-syslogger" --version)" = "mct-syslogger $GITHUB_REF_NAME"
           "$RUNNER_TEMP/mct-syslogger_linux_amd64/mct-syslogger" --help
       - name: Generate checksums
         working-directory: dist

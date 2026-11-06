@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -116,6 +117,30 @@ func TestParseOptions(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			if _, err := parseOptions(args, io.Discard); err == nil {
 				t.Fatal("无效参数未被拒绝")
+			}
+		})
+	}
+}
+
+func TestVersionDispatch(t *testing.T) {
+	if opts := testOptions(t, "--version=false"); opts.version {
+		t.Fatal("显式关闭版本参数未生效")
+	}
+	for _, args := range [][]string{{"--version"}, {"--version", "--list"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], args...)
+			// 独立进程的 PATH 不含外部工具，确保版本查询无需 journalctl 或 git。
+			command.Env = append(os.Environ(), "SYSLOGGER_VERSION_TEST_HELPER=1", "PATH="+t.TempDir())
+			var output, diagnostics bytes.Buffer
+			command.Stdout = &output
+			command.Stderr = &diagnostics
+			if err := command.Run(); err != nil {
+				t.Fatalf("版本查询失败: %v %s", err, &diagnostics)
+			}
+			if output.String() != "mct-syslogger "+version+"\n" || diagnostics.Len() != 0 {
+				t.Fatalf("版本未独立输出到 stdout: stdout=%q stderr=%q", &output, &diagnostics)
 			}
 		})
 	}
@@ -657,6 +682,9 @@ func TestLargeAndFinalLines(t *testing.T) {
 
 // TestMain 在子进程中模拟 journalctl，测试路径只包含该辅助进程。
 func TestMain(m *testing.M) {
+	if os.Getenv("SYSLOGGER_VERSION_TEST_HELPER") == "1" {
+		os.Exit(mainCode())
+	}
 	if os.Getenv("SYSLOGGER_LOG_TEST_HELPER") == "1" {
 		if got := journalMatchValues(os.Args[1:], "--namespace="); !reflect.DeepEqual(got, []string{"*"}) {
 			fmt.Fprintf(os.Stderr, "journal namespace mismatch: %q\n", got)

@@ -61,6 +61,7 @@ type options struct {
 	colour            bool
 	list              bool
 	debug             bool
+	version           bool
 }
 
 func parseOptions(args []string, help io.Writer) (options, error) {
@@ -86,6 +87,7 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	flags.BoolVar(&opts.colour, "colour", false, "启用 ANSI 彩色输出；默认关闭，--colour=false 关闭")
 	flags.BoolVar(&opts.list, "list", false, "列出本机项目 → 实例 → 组件；支持 -p / -i / -c")
 	flags.BoolVar(&opts.debug, "debug", false, "向 stderr 输出查询耗时和扫描统计，与 -l debug 无关")
+	flags.BoolVar(&opts.version, "version", false, "显示编译版本并退出")
 	for _, group := range optionGroups {
 		for _, name := range group.names {
 			if name.short != "" {
@@ -102,6 +104,9 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	}
 	if flags.NArg() != 0 {
 		return opts, fmt.Errorf("不支持位置参数：%s", strings.Join(flags.Args(), " "))
+	}
+	if opts.version {
+		return opts, nil
 	}
 	if opts.lines < 0 {
 		return opts, errors.New("--lines 必须为非负整数")

@@ -66,6 +66,7 @@ var optionGroups = []struct {
 		names: []optionName{
 			{long: "json"},
 			{long: "colour"},
+			{long: "version"},
 		},
 	},
 }
@@ -75,6 +76,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 	fmt.Fprint(output, `mct-syslogger — 查看本机 syslogger 日志及项目 / 实例 / 组件目录
 
 用法：
+  mct-syslogger --version
   mct-syslogger --list [身份筛选] [--json] [--colour]
   mct-syslogger [身份筛选] [日志过滤参数] [输出参数]
   身份筛选：-p PROJECT、-i INSTANCE、-c COMPONENT，均可省略或重复。

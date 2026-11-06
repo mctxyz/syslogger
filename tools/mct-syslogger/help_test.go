@@ -53,6 +53,7 @@ func TestHelpLayout(t *testing.T) {
 		"--debug",
 		"--json",
 		"--colour",
+		"--version",
 		"-h, --help",
 	}
 	if len(rows) != len(want) {
