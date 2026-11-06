@@ -37,6 +37,7 @@ func TestHelpLayout(t *testing.T) {
 	}
 	want := []string{
 		"--list",
+		"--ranges",
 		"-p, --project PROJECT",
 		"-i, --instance-id INSTANCE",
 		"-c, --component COMPONENT",
@@ -136,7 +137,12 @@ func TestHelpExamples(t *testing.T) {
 				}
 			}
 			var output bytes.Buffer
-			if opts.list {
+			if opts.ranges {
+				fakeRanges(t, rangeFixtures())
+				if err := showRanges(context.Background(), opts.asJSON, &output, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+			} else if opts.list {
 				if err := showCatalog(store, opts, &output); err != nil {
 					t.Fatal(err)
 				}

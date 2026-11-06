@@ -1,4 +1,4 @@
-// Command mct-syslogger 展示日志名称目录并检索本机 journal 中的 syslogger 日志。
+// Command mct-syslogger 展示日志名称目录、空间留存范围并检索本机 syslogger 日志。
 package main
 
 import (
@@ -49,7 +49,12 @@ func mainCode() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := query(ctx, opts, os.Stdout, os.Stderr); err != nil {
+	if opts.ranges {
+		err = showRanges(ctx, opts.asJSON, os.Stdout, os.Stderr)
+	} else {
+		err = query(ctx, opts, os.Stdout, os.Stderr)
+	}
+	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return 130
 		}

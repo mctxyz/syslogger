@@ -126,7 +126,7 @@ func TestVersionDispatch(t *testing.T) {
 	if opts := testOptions(t, "--version=false"); opts.version {
 		t.Fatal("显式关闭版本参数未生效")
 	}
-	for _, args := range [][]string{{"--version"}, {"--version", "--list"}} {
+	for _, args := range [][]string{{"--version"}, {"--version", "--list"}, {"--version", "--ranges"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -682,6 +682,12 @@ func TestLargeAndFinalLines(t *testing.T) {
 
 // TestMain 在子进程中模拟 journalctl，测试路径只包含该辅助进程。
 func TestMain(m *testing.M) {
+	if os.Getenv("SYSLOGGER_RANGES_TEST_HELPER") == "1" {
+		if filepath.Base(os.Args[0]) == "journalctl" {
+			os.Exit(rangeJournalHelper())
+		}
+		os.Exit(mainCode())
+	}
 	if os.Getenv("SYSLOGGER_VERSION_TEST_HELPER") == "1" {
 		os.Exit(mainCode())
 	}

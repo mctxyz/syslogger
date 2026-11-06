@@ -21,8 +21,8 @@ var optionGroups = []struct {
 	names []optionName
 }{
 	{
-		title: "查看目录",
-		names: []optionName{{long: "list"}},
+		title: "查看目录与空间范围",
+		names: []optionName{{long: "list"}, {long: "ranges"}},
 	},
 	{
 		title: "身份筛选（目录和日志通用）",
@@ -62,7 +62,7 @@ var optionGroups = []struct {
 		names: []optionName{{long: "debug"}},
 	},
 	{
-		title: "输出与帮助（目录和日志通用）",
+		title: "输出与帮助",
 		names: []optionName{
 			{long: "json"},
 			{long: "colour"},
@@ -73,11 +73,12 @@ var optionGroups = []struct {
 
 // writeHelp 先展示身份发现和常用查询，再提供完整参数与自动化契约。
 func writeHelp(output io.Writer, flags *flag.FlagSet) {
-	fmt.Fprint(output, `mct-syslogger — 查看本机 syslogger 日志及项目 / 实例 / 组件目录
+	fmt.Fprint(output, `mct-syslogger — 查看本机日志、空间留存范围及项目 / 实例 / 组件目录
 
 用法：
   mct-syslogger --version
   mct-syslogger --list [身份筛选] [--json] [--colour]
+  mct-syslogger --ranges [--json]
   mct-syslogger [身份筛选] [日志过滤参数] [输出参数]
   身份筛选：-p PROJECT、-i INSTANCE、-c COMPONENT，均可省略或重复。
 
@@ -94,6 +95,13 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     mct-syslogger --list -p example-project -i example-instance
   组件行先显示最后接收时间，再显示当前小时及前两个小时的各小时接收量。
   数量表示 SDK 接收活动，不是 journal 当前留存条数。
+
+  查看四个日志空间当前可查询的首尾时间：
+    mct-syslogger --ranges
+  输出 JSON 数组供脚本读取：
+    mct-syslogger --ranges --json
+  FIRST_ENTRY / LAST_ENTRY 是当前权限可读记录的首尾时间；- 表示暂无可读记录。
+  每次执行重新查询，时间边界不保证中间连续，也不保证每个项目都覆盖该区间。
 
 2. 用找到的名称查日志
   查看该组件近 1 小时内最新 100 条匹配日志：
@@ -155,6 +163,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   跟踪：-f 按 -s 读取历史后等待新日志；默认近 1 小时，-s now -f 只看新日志。
     跟踪默认不限条数；-n N 同时计入历史和新日志，达到后退出；-f 与 -u 不能同用。
   目录：--list 只接受身份筛选、--json、--colour，不接受时间、等级和内容过滤。
+  空间范围：--ranges 只接受 --json；按 journal 收录时间查询，不受日志默认近 1 小时限制。
   写法：大写名称是待替换的参数值；含空格或正则的值加引号；查询条件都通过参数传入。
 
 4. Agent / 脚本怎么用
@@ -168,6 +177,8 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   日志字段：timestamp、level、project、instance_id、component、message，以及可选 fields。
   结果写 stdout；帮助、错误和 --debug 查询统计写 stderr；默认无 ANSI 颜色。
   JSON 查询无匹配时：目录输出 []，日志无记录输出，均返回 0。
+  空间范围 JSON 为四项数组，字段是 namespace、first_entry、last_entry。
+  首尾时间保持 UTC 和微秒精度；空空间的两个时间为 null，查询失败返回错误。
   退出码：0=成功/无匹配/帮助；1=查询失败；2=参数/正则错误；130=收到中断。
   批处理优先使用不带 -f 的查询；跟踪即使指定 -n，匹配不足也会等待，需另设执行时限。
 `)

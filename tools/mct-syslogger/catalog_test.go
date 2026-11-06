@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/mctxyz/syslogger/internal/catalog"
 	"github.com/mctxyz/syslogger/internal/hourly"
@@ -183,7 +184,12 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 				{Name: "thousand", CreatedAt: at, LastActiveAt: at, LogCounts: catalogCounts(at, 1000)},
 				{Name: "normal", CreatedAt: at, LastActiveAt: at, LogCounts: catalogCounts(at, 11483)},
 			}
-			if err := store.Merge(catalog.Instance{Project: "p", InstanceID: "i", Components: components}, now); err != nil {
+			if err := store.Merge(catalog.Instance{
+				Project:             "p",
+				InstanceID:          "i",
+				InstanceDescription: "实例说明",
+				Components:          components,
+			}, now); err != nil {
 				t.Fatal(err)
 			}
 			stored, err := store.Read()
@@ -197,6 +203,13 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 				opts.colour = colour
 				if err := showCatalog(store, opts, &output); err != nil {
 					t.Fatal(err)
+				}
+				instanceName := "i"
+				if colour {
+					instanceName = colourInstance + instanceName + colourReset
+				}
+				if !strings.Contains(output.String(), instanceName+"  实例说明\n") {
+					t.Fatalf("实例描述未保持默认前景色及正常亮度：%q", output.String())
 				}
 				for _, component := range components {
 					name := component.Name
@@ -222,10 +235,12 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 					if !strings.HasPrefix(plain, "每小时: ") || len(parts) != hourly.Hours {
 						t.Fatalf("组件数量、时间格式或时区不符：prefix=%q got=%q", prefix, output.String())
 					}
-					wanted := hourly.Start(at).Local().Format("01-02 15:04 -0700") + "=" + counts[component.Name]
+					start := hourly.Start(at).Local()
+					wanted := start.Format("15:04") + "=" + counts[component.Name]
+					dated := start.Format("01-02 15:04") + "=" + counts[component.Name]
 					var found bool
 					for _, part := range parts {
-						if part == wanted {
+						if part == wanted || part == dated {
 							found = true
 						} else if !strings.HasSuffix(part, "=0") {
 							t.Fatalf("未接收日志的小时出现数量：%q", part)
@@ -236,12 +251,9 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 					}
 				}
 				description := `RPC\t获取`
-				if colour {
-					description = colourCatalogDetails + description + colourReset
-				}
 				wantDescription := "        │" + strings.Repeat(" ", 13) + description + "\n"
 				if !strings.Contains(output.String(), wantDescription) {
-					t.Fatalf("组件描述未另起一行对齐时间或样式不符: %q", output.String())
+					t.Fatalf("组件描述未对齐时间，或未与实例描述保持相同样式: %q", output.String())
 				}
 			}
 			var output bytes.Buffer
@@ -265,6 +277,79 @@ func TestCatalogComponentCountsAndLocalTime(t *testing.T) {
 			}
 			if !reflect.DeepEqual(decoded, stored) {
 				t.Fatalf("JSON 小时视图或身份元数据不符：%s", output.String())
+			}
+		})
+	}
+}
+
+func TestCatalogCompactHourCounts(t *testing.T) {
+	east := time.FixedZone("east", 8*60*60)
+	fractional := time.FixedZone("fractional", 5*60*60+45*60)
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lordHowe, err := time.LoadLocation("Australia/Lord_Howe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		location *time.Location
+		at       time.Time
+		want     string
+	}{
+		{
+			name:     "same-day",
+			location: east,
+			at:       time.Date(2026, 11, 6, 18, 25, 0, 0, east),
+			want:     "每小时: 16:00=0 | 17:00=4,905 | 18:00=1,842",
+		},
+		{
+			name:     "fractional-offset",
+			location: fractional,
+			at:       time.Date(2026, 11, 6, 18, 25, 0, 0, fractional),
+			want:     "每小时: 16:00=0 | 17:00=4,905 | 18:00=1,842",
+		},
+		{
+			name:     "midnight",
+			location: east,
+			at:       time.Date(2026, 11, 7, 0, 25, 0, 0, east),
+			want:     "每小时: 11-06 22:00=0 | 11-06 23:00=4,905 | 11-07 00:00=1,842",
+		},
+		{
+			name:     "new-year",
+			location: east,
+			at:       time.Date(2027, 1, 1, 0, 25, 0, 0, east),
+			want:     "每小时: 12-31 22:00=0 | 12-31 23:00=4,905 | 01-01 00:00=1,842",
+		},
+		{
+			name:     "repeated-hour",
+			location: newYork,
+			at:       time.Date(2026, 11, 1, 6, 25, 0, 0, time.UTC),
+			want:     "每小时: 00:00 -0400=0 | 01:00 -0400=4,905 | 01:00 -0500=1,842",
+		},
+		{
+			name:     "partial-hour",
+			location: lordHowe,
+			at:       time.Date(2026, 10, 3, 15, 45, 0, 0, time.UTC),
+			want:     "每小时: 00:00 +1030=0 | 01:00 +1030=4,905 | 02:30 +1100=1,842",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := time.Local
+			time.Local = test.location
+			t.Cleanup(func() { time.Local = original })
+			window := (hourly.Window{}).Recent(test.at)
+			for index, count := range [...]uint64{0, 4905, 1842} {
+				window[index].Count = count
+			}
+			before := window
+			if got := catalogHourCounts(window); got != test.want {
+				t.Fatalf("紧凑小时数量格式不符：got=%q want=%q", got, test.want)
+			}
+			if window != before {
+				t.Fatal("显示格式修改了原始时间或数量")
 			}
 		})
 	}

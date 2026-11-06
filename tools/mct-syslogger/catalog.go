@@ -10,10 +10,11 @@ import (
 
 	humanize "github.com/dustin/go-humanize"
 	"github.com/mctxyz/syslogger/internal/catalog"
+	"github.com/mctxyz/syslogger/internal/hourly"
 	"github.com/rivo/uniseg"
 )
 
-// 目录中的组件时间、小时计数和描述统一使用默认前景色的弱化亮度。
+// 目录中的组件时间和小时计数使用默认前景色的弱化亮度。
 const colourCatalogDetails = "\x1b[2m"
 
 // showCatalog 读取名称目录并过滤一年未活跃组件，身份筛选与展示独立于 journal。
@@ -98,14 +99,7 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 			name := escaped(component.Name)
 			padding := strings.Repeat(" ", nameWidth-uniseg.StringWidth(name)+2)
 			timestamp := component.LastActiveAt.Local().Format("2006-01-02 15:04:05")
-			hours := make([]string, 0, len(component.LogCounts))
-			for _, bucket := range component.LogCounts {
-				// 起点包含日期和时区偏移，跨日及夏令时重复小时仍可分别识别。
-				start := bucket.StartTime.Local().Format("01-02 15:04 -0700")
-				count := humanize.BigComma(new(big.Int).SetUint64(bucket.Count))
-				hours = append(hours, start+"="+count)
-			}
-			count := "每小时: " + strings.Join(hours, " | ")
+			count := catalogHourCounts(component.LogCounts)
 			if opts.colour {
 				name = colourText(name, colourComponent)
 				timestamp = colourText(timestamp, colourCatalogDetails)
@@ -117,9 +111,6 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 			}
 			if component.Description != "" {
 				description := escaped(component.Description)
-				if opts.colour {
-					description = colourText(description, colourCatalogDetails)
-				}
 				indent := projectPrefix + prefix + descriptionPrefix + strings.Repeat(" ", nameWidth+2)
 				if _, err := fmt.Fprintln(output, indent+description); err != nil {
 					return err
@@ -128,6 +119,32 @@ func showCatalog(store catalog.Store, opts options, output io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// catalogHourCounts 用时分展示三小时数量，仅在跨日或偏移变化时补充消歧信息。
+func catalogHourCounts(window hourly.Window) string {
+	layout := "15:04"
+	first := window[0].StartTime.Local()
+	last := window[len(window)-1].StartTime.Local()
+	if first.Format("2006-01-02") != last.Format("2006-01-02") {
+		layout = "01-02 15:04"
+	}
+	_, firstOffset := first.Zone()
+	for _, bucket := range window {
+		_, offset := bucket.StartTime.Local().Zone()
+		if offset != firstOffset {
+			// 时区偏移发生变化时，保留偏移以区分夏令时重复小时。
+			layout += " -0700"
+			break
+		}
+	}
+	hours := make([]string, 0, len(window))
+	for _, bucket := range window {
+		start := bucket.StartTime.Local().Format(layout)
+		count := humanize.BigComma(new(big.Int).SetUint64(bucket.Count))
+		hours = append(hours, start+"="+count)
+	}
+	return "每小时: " + strings.Join(hours, " | ")
 }
 
 // catalogLabel 复用日志输出的控制字符转义，为项目和实例保留单行名称及补充信息。

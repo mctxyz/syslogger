@@ -60,6 +60,7 @@ type options struct {
 	ignoreKeywordCase bool
 	colour            bool
 	list              bool
+	ranges            bool
 	debug             bool
 	version           bool
 }
@@ -82,10 +83,11 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	flags.StringVar(&opts.until, "until", "", "结束时间 `TIME`；默认不限，与 -f 互斥")
 	flags.IntVar(&opts.lines, "lines", 100, "最多 `N` 条匹配日志；0 为全部，跟踪默认不限")
 	flags.BoolVar(&opts.follow, "follow", false, "持续跟踪，默认先读历史；-s now 只看新日志")
-	flags.BoolVar(&opts.asJSON, "json", false, "机器可读输出：目录为数组，日志为 NDJSON")
+	flags.BoolVar(&opts.asJSON, "json", false, "机器可读输出：目录和空间范围为数组，日志为 NDJSON")
 	flags.BoolVar(&opts.ignoreKeywordCase, "ignore-case", false, "仅让 -k 关键词忽略大小写")
 	flags.BoolVar(&opts.colour, "colour", false, "启用 ANSI 彩色输出；默认关闭，--colour=false 关闭")
 	flags.BoolVar(&opts.list, "list", false, "列出本机项目 → 实例 → 组件；支持 -p / -i / -c")
+	flags.BoolVar(&opts.ranges, "ranges", false, "查询四个日志空间当前可读记录的最早和最新时间；支持 --json")
 	flags.BoolVar(&opts.debug, "debug", false, "向 stderr 输出查询耗时和扫描统计，与 -l debug 无关")
 	flags.BoolVar(&opts.version, "version", false, "显示编译版本并退出")
 	for _, group := range optionGroups {
@@ -125,6 +127,19 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 		})
 		if incompatible != "" {
 			return opts, fmt.Errorf("--list 仅支持身份筛选和输出格式，不能同时使用 --%s", incompatible)
+		}
+	}
+	if opts.ranges {
+		var incompatible string
+		flags.Visit(func(option *flag.Flag) {
+			switch option.Name {
+			case "ranges", "json":
+			default:
+				incompatible = option.Name
+			}
+		})
+		if incompatible != "" {
+			return opts, fmt.Errorf("--ranges 仅支持 --json，不能同时使用 --%s", incompatible)
 		}
 	}
 	linesSet := false
