@@ -9,17 +9,25 @@ Go 1.23 本机结构化日志与组件健康状态库，配套 `mct-syslogger` �
 
 ## 命令工具安装与初始化
 
-支持 Linux amd64／arm64，需要 systemd 245+、交互终端及 root 或 sudo：
+安装脚本支持 Linux amd64／arm64，需要交互终端及 root 或 sudo：
 
 ```bash
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash'
 ```
 
-脚本下载并校验最新 Release，检查参数接口后，询问**安装前缀**（默认 `/usr/local`）和 **四个 journal 空间的持久化容量**（依次默认 `1G/2G/1G/1G`），确认后安装并执行 `init`。主机须已有本机 `app` 账户，命令默认安装到 `/usr/local/bin/mct-syslogger`。
+脚本下载并校验最新 Release，检查参数接口后，询问**安装前缀**（默认 `/usr/local`），确认后安装或更新程序及配套文档。首次安装默认也只安装程序，保留主机日志配置和 journald 服务状态；命令默认安装到 `/usr/local/bin/mct-syslogger`。
+
+需要一并初始化日志接收入口时，显式使用 `--init`：
+
+```bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash -s -- --init'
+```
+
+该模式另需 systemd 245+、已有本机 `app` 账户及初始化系统工具，并询问四个 journal 空间的持久化容量，依次默认 `1G/2G/1G/1G`。`--init` 会重新生成受管 journal 配置，覆盖其中的手动修改，并重启四个专用 journald 实例；管理员独立配置保留并参与冲突检查。
 
 初始化创建或核验 `app` 持有的名称根目录，并重启四个专用 journald 实例。已有目录元数据不符合规范时须人工处理；历史内容由部署方手动清理，清理前先停止相关写入进程。缩小容量可能清理对应空间的旧归档，失败时已完成步骤保留。旧单空间的手动清理见[部署说明](docs/journal.md#升级与手动清理旧空间)。
 
-源码中可运行 `bash tools/install/install.sh`，帮助使用 `bash tools/install/install.sh --help`。依赖、手工下载和完整安装说明见 [工具文档](tools/README.md#release-下载与安装)。
+源码中可运行 `bash tools/install/install.sh` 安装或更新，使用 `bash tools/install/install.sh --init` 安装并初始化，帮助使用 `bash tools/install/install.sh --help`。程序安装后也可单独执行 `sudo mct-syslogger init`。依赖、手工下载和完整安装说明见 [工具文档](tools/README.md#release-下载与安装)。
 
 ## 接入 SDK
 

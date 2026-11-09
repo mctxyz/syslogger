@@ -25,15 +25,21 @@ prompt() {
 }
 
 main() {
+    local initialize=false
     if [[ $# -ne 0 ]]; then
+        [[ $# -eq 1 ]] || die '仅支持单独使用 --init 或 --help。'
         case "$1" in
+            --init)
+                initialize=true
+                ;;
             -h|--help)
-                [[ $# -eq 1 ]] || die '帮助选项不接受其他参数。'
                 printf '%s\n' \
-                    '用法：bash install.sh' \
-                    '下载最新 GitHub Release，交互安装并运行 mct-syslogger init。' \
-                    '支持 Linux amd64/arm64，需要交互终端、curl、GNU tar/coreutils、awk、getent，以及 root 或 sudo。' \
-                    '安装前缀默认 /usr/local；名称目录固定由已有 app 账户持有；debug/info/warning/error 空间默认分别 1G/2G/1G/1G。'
+                    '用法：bash install.sh [--init]' \
+                    '默认下载并校验最新 GitHub Release，交互安装或更新命令及配套文档，保持主机日志配置原样。' \
+                    '--init  额外询问四项容量并执行初始化：重新生成受管 journal 配置，覆盖其中的手动修改，重启四个专用 journald 实例。' \
+                    '首次安装默认也只安装程序，需要配置日志接收入口时显式使用 --init，或以 root 运行 mct-syslogger init。' \
+                    '支持 Linux amd64/arm64，需要交互终端、curl、GNU tar/coreutils、awk，以及 root 或 sudo。' \
+                    '安装前缀默认 /usr/local；--init 另需 getent、已有本机 app 账户、systemd 245+ 及 init 所需系统工具，四空间容量默认 1G/2G/1G/1G。'
                 return
                 ;;
             *)
@@ -43,7 +49,7 @@ main() {
     fi
 
     local dependency arch
-    for dependency in uname id curl tar sha256sum awk mktemp mkdir rm install getent; do
+    for dependency in uname id curl tar sha256sum awk mktemp mkdir rm install; do
         command -v "$dependency" >/dev/null || die "缺少依赖：$dependency，请先安装。"
     done
     [[ $(uname -s) == Linux ]] || die '仅支持 Linux。'
@@ -58,11 +64,14 @@ main() {
             die "不支持的 CPU 架构：$(uname -m)"
             ;;
     esac
-    getent -s files passwd app >/dev/null || die '需要已有的本机 app 账户，请管理员先准备该账户。'
+    if [[ "$initialize" == true ]]; then
+        command -v getent >/dev/null || die '初始化缺少依赖：getent，请先安装。'
+        getent -s files passwd app >/dev/null || die '初始化需要已有的本机 app 账户，请管理员先准备该账户。'
+    fi
 
     local -a elevate=()
     if [[ $(id -u) != 0 ]]; then
-        command -v sudo >/dev/null || die '初始化需要 root，请先安装 sudo 或由 root 运行。'
+        command -v sudo >/dev/null || die '安装需要 root，请先安装 sudo 或由 root 运行。'
         elevate=(sudo)
     fi
     if ! { exec 3</dev/tty; } 2>/dev/null; then
@@ -148,22 +157,31 @@ main() {
         fi
         printf '请输入绝对安装路径，且不能使用系统根目录。\n' >&2
     done
-    for index in "${!groups[@]}"; do
-        prompt "${groups[$index]} journal 持久化容量 [${capacities[$index]}]（正整数字节或 K/M/G/T/P/E）：" "${capacities[$index]}"
-        capacities[$index]=$REPLY
-    done
+    if [[ "$initialize" == true ]]; then
+        for index in "${!groups[@]}"; do
+            prompt "${groups[$index]} journal 持久化容量 [${capacities[$index]}]（正整数字节或 K/M/G/T/P/E）：" "${capacities[$index]}"
+            capacities[$index]=$REPLY
+        done
+    fi
     target="$prefix/bin/mct-syslogger"
     doc_dir="$prefix/share/doc/mct-syslogger"
-    printf '\n版本：%s（linux/%s）\n命令：%s\n文档：%s\n名称目录所有者：app\n' \
+    printf '\n版本：%s（linux/%s）\n命令：%s\n文档：%s\n' \
         "$tag" "$arch" "$target" "$doc_dir"
-    for index in "${!groups[@]}"; do
-        printf 'journal %s 容量：%s\n' "${groups[$index]}" "${capacities[$index]}"
-    done
-    printf '%s\n' \
-        '将更新上述命令和文档，并以 root 运行 init：创建或核验 app 名称根目录、应用配置、重启四个专用 journald 实例。' \
-        '需要 Linux、systemd 245+ 及 init 所需系统工具；账户、权限和容量规则由 init 校验。' \
-        '历史目录和配置由部署方手动处理，清理前先停止相关写入进程；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
-    prompt '确认安装并初始化？[y/N]：' 'n'
+    if [[ "$initialize" == true ]]; then
+        printf '名称目录所有者：app\n'
+        for index in "${!groups[@]}"; do
+            printf 'journal %s 容量：%s\n' "${groups[$index]}" "${capacities[$index]}"
+        done
+        printf '%s\n' \
+            '将更新上述命令和文档，并以 root 运行 init：创建或核验 app 名称根目录、重新生成受管配置、重启四个专用 journald 实例。' \
+            '受管配置中的手动修改会被覆盖；管理员独立配置保留并参与冲突检查。' \
+            '需要 Linux、systemd 245+ 及 init 所需系统工具；账户、权限和容量规则由 init 校验。' \
+            '历史目录和配置由部署方手动处理，清理前先停止相关写入进程；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
+        prompt '确认安装并初始化？[y/N]：' 'n'
+    else
+        printf '%s\n' '本次仅安装或更新上述命令和文档，保持日志配置、名称目录和 journald 服务状态原样。'
+        prompt '确认安装或更新？[y/N]：' 'n'
+    fi
     case "$REPLY" in
         y|Y|yes|YES)
             ;;
@@ -173,12 +191,16 @@ main() {
             ;;
     esac
 
-    # 系统写入集中在确认之后，主机权限和 journal 配置继续由 init 统一管理。
+    # 安装写入集中在确认之后，主机权限和 journal 配置仅在显式初始化时由 init 管理。
     "${elevate[@]}" install -d -m 0755 -- "$prefix/bin" "$doc_dir/tools" "$doc_dir/docs"
     for relative in tools/README.md tools/THIRD_PARTY_NOTICES.md docs/journal.md; do
         "${elevate[@]}" install -m 0644 -T -- "$work_dir/unpacked/$package/$relative" "$doc_dir/$relative"
     done
     "${elevate[@]}" install -m 0755 -T -- "$candidate" "$target"
+    if [[ "$initialize" == false ]]; then
+        printf '安装或更新完成：%s\n本次保持主机日志配置原样。首次配置日志接收入口时，可显式使用安装脚本 --init，或以 root 执行：%q init\n' "$target" "$target"
+        return
+    fi
     local -a init_args=(init)
     for index in "${!groups[@]}"; do
         init_args+=("--journal-${groups[$index]}-max-use=${capacities[$index]}")

@@ -34,7 +34,7 @@ mct-syslogger -p example-project -i example-instance -c example-component -s=-2h
 
 ## Release 下载与安装
 
-### 一条命令安装并初始化
+### 一条命令安装或更新
 
 在目标 Linux 主机的交互终端执行：
 
@@ -42,21 +42,33 @@ mct-syslogger -p example-project -i example-instance -c example-component -s=-2h
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash'
 ```
 
-[安装脚本](https://github.com/mctxyz/syslogger/blob/main/tools/install/install.sh) 自动识别 amd64／arm64，解析最新 Release 的固定 tag，下载对应压缩包并校验 `SHA256SUMS`。安装写入前只读检查四项容量及固定账户的参数接口；接口不符时停止，保留原有安装。行为更新以配套 Release 为准，参数检查不替代版本配套。主机须已有本机 `app` 账户，之后交互收集以下参数：
+[安装脚本](https://github.com/mctxyz/syslogger/blob/main/tools/install/install.sh) 自动识别 amd64／arm64，解析最新 Release 的固定 tag，下载对应压缩包并校验 `SHA256SUMS`。默认只询问安装前缀，确认后安装或更新命令及配套文档，保留日志配置、名称目录和 journald 服务状态；首次安装也是如此。
 
-| 参数 | 默认值与用途 |
-| --- | --- |
-| 安装前缀 | `/usr/local`；命令安装到 `bin/mct-syslogger`，使用说明、许可和部署文档安装到 `share/doc/mct-syslogger/` |
-| debug 持久化容量 | `1G`，传给 `--journal-debug-max-use` |
-| info/notice 持久化容量 | `2G`，传给 `--journal-info-max-use` |
-| warning 持久化容量 | `1G`，传给 `--journal-warning-max-use` |
-| error 及以上持久化容量 | `1G`，传给 `--journal-error-max-use` |
+两种模式在安装写入前都只读检查四项容量及固定账户的参数接口；探针仅解析参数和显示帮助，不执行主机初始化。接口不符时停止，保留原有安装。行为更新以配套 Release 为准，参数检查不替代版本配套。
 
-四项容量接受正整数字节或 `K/M/G/T/P/E` 单位。脚本显示版本、路径、固定所有者、四项容量及初始化影响，确认后安装并执行带四容量参数的 `mct-syslogger init`。普通用户仅在系统写入及初始化时通过 `sudo` 提权，root 可直接运行；无需对整个下载管道使用 `sudo`。可先下载并审阅脚本，再使用 `bash install.sh`，或用 `bash install.sh --help` 查看说明。
+需要同时配置日志接收入口时，显式传入 `--init`：
 
-需要 Bash、curl、GNU tar/coreutils、awk、getent、root 或 sudo，以及初始化所需的 Linux、systemd 245+ 和系统工具。交互从 `/dev/tty` 读取，支持管道安装；没有控制终端时明确失败。自定义安装前缀的 `bin/` 若未在 PATH 中，可使用安装后显示的绝对路径运行命令。
+```bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash -s -- --init'
+```
 
-历史内容由部署方手动处理，清理前先停止相关写入进程。初始化创建或核验名称根目录、应用专用 journal 配置并重启专用实例，缩小容量可能清理旧归档。下载或校验失败、取消确认均不会执行系统安装或初始化；安装或初始化失败返回非零，已经完成的步骤保留。命令安装后若 `init` 报错，请按错误指引人工处理后重试。日志读取权限继续由管理员单独管理。
+也可下载脚本后运行 `bash install.sh --init`，或在程序安装后单独运行 `sudo mct-syslogger init`。两种脚本模式的交互参数如下：
+
+| 参数 | 模式 | 默认值与用途 |
+| --- | --- | --- |
+| 安装前缀 | 两种模式 | `/usr/local`；命令安装到 `bin/mct-syslogger`，使用说明、许可和部署文档安装到 `share/doc/mct-syslogger/` |
+| debug 持久化容量 | `--init` | `1G`，传给 `--journal-debug-max-use` |
+| info/notice 持久化容量 | `--init` | `2G`，传给 `--journal-info-max-use` |
+| warning 持久化容量 | `--init` | `1G`，传给 `--journal-warning-max-use` |
+| error 及以上持久化容量 | `--init` | `1G`，传给 `--journal-error-max-use` |
+
+默认模式显示版本和安装路径，确认后仅写入命令及文档。`--init` 模式另行显示固定所有者、四项容量及初始化影响，确认后安装并执行带四容量参数的 `mct-syslogger init`；容量接受正整数字节或 `K/M/G/T/P/E` 单位。普通用户仅在安装写入及显式初始化时通过 `sudo` 提权，root 可直接运行；无需对整个下载管道使用 `sudo`。可先下载并审阅脚本，再用 `bash install.sh --help` 查看说明。
+
+安装需要 Linux、Bash、curl、GNU tar/coreutils、awk、root 或 sudo；`--init` 模式另需 getent、已有本机 `app` 账户、systemd 245+ 及初始化系统工具。日志检索仍需要 systemd 245+、journalctl 和相应读取权限。交互从 `/dev/tty` 读取，支持管道安装；没有控制终端时明确失败。自定义安装前缀的 `bin/` 若未在 PATH 中，可使用安装后显示的绝对路径运行命令。
+
+`--init` 或直接执行 `mct-syslogger init` 会创建或核验名称根目录、重新生成带工具标识的受管 journal 配置并重启专用实例；受管文件中的手动修改会被覆盖。管理员独立配置保留并参与冲突检查，缩小容量可能清理旧归档。历史内容由部署方手动处理，清理前先停止相关写入进程。
+
+下载或校验失败、取消确认均不会执行系统安装或初始化；安装或初始化失败返回非零，已经完成的步骤保留。命令安装后若显式初始化失败，请按错误指引人工处理后重试。日志读取权限继续由管理员单独管理。
 
 ### 手工下载安装
 

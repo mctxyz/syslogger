@@ -155,6 +155,7 @@ esac
 printf '%s\n' "$MOCK_UID"
 `,
 		"getent": `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_LOG/getent"
 [[ $# -eq 4 && "$1" == -s && "$2" == files && "$3" == passwd && "$4" == app && "$MOCK_APP_EXISTS" == 1 ]]
 `,
 		"sudo": `#!/usr/bin/env bash
@@ -254,7 +255,10 @@ func (f *installerFixture) run(t *testing.T, input string, tty bool, args ...str
 		if err != nil {
 			t.Fatal("PTY 测试需要 util-linux 的 script 命令")
 		}
-		command := "cat '" + strings.ReplaceAll(path, "'", "'\\''") + "' | bash"
+		command := "cat '" + strings.ReplaceAll(path, "'", "'\\''") + "' | bash -s --"
+		for _, argument := range args {
+			command += " '" + strings.ReplaceAll(argument, "'", "'\\''") + "'"
+		}
 		cmd = exec.CommandContext(ctx, script, "--quiet", "--return", "--echo", "never", "--command", command, "/dev/null")
 	} else {
 		cmd = exec.CommandContext(ctx, "bash", append([]string{path}, args...)...)
@@ -283,7 +287,11 @@ func (f *installerFixture) run(t *testing.T, input string, tty bool, args ...str
 	return string(output), status
 }
 
-func (f *installerFixture) input(capacity, confirmation string) string {
+func (f *installerFixture) input(confirmation string) string {
+	return f.prefix + "\n" + confirmation + "\n"
+}
+
+func (f *installerFixture) initInput(capacity, confirmation string) string {
 	return f.prefix + "\n" + capacity + "\n\n\n\n" + confirmation + "\n"
 }
 
@@ -306,6 +314,79 @@ func (f *installerFixture) assertNoInit(t *testing.T) {
 	}
 }
 
+// assertInstalled 核对两种安装模式共有的文件、下载版本及提权行为。
+func (f *installerFixture) assertInstalled(t *testing.T, arch string) {
+	t.Helper()
+	for path, mode := range map[string]os.FileMode{
+		"bin/mct-syslogger":                                    0o755,
+		"share/doc/mct-syslogger/tools/README.md":              0o644,
+		"share/doc/mct-syslogger/tools/THIRD_PARTY_NOTICES.md": 0o644,
+		"share/doc/mct-syslogger/docs/journal.md":              0o644,
+	} {
+		info, err := os.Stat(filepath.Join(f.prefix, path))
+		if err != nil || info.Mode().Perm() != mode {
+			t.Fatalf("安装文件或模式不符: %s, %v", path, err)
+		}
+	}
+	requests := strings.Split(strings.TrimSpace(readLog(t, filepath.Join(f.log, "curl"))), "\n")
+	wantRequests := []string{
+		"https://github.com/mctxyz/syslogger/releases/latest",
+		"https://github.com/mctxyz/syslogger/releases/download/test-release/mct-syslogger_linux_" + arch + ".tar.gz",
+		"https://github.com/mctxyz/syslogger/releases/download/test-release/SHA256SUMS",
+	}
+	if !reflect.DeepEqual(requests, wantRequests) {
+		t.Fatalf("下载未固定同一 tag: %q", requests)
+	}
+	usedSudo := readLog(t, filepath.Join(f.log, "sudo")) != ""
+	if usedSudo != (f.settings["MOCK_UID"] != "0") {
+		t.Fatalf("提权路径不符: %v", usedSudo)
+	}
+}
+
+func TestInstallerUpdatesWithoutInitialization(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		machine   string
+		arch      string
+		uid       string
+		installed bool
+	}{
+		{name: "first-install-without-app", machine: "x86_64", arch: "amd64", uid: "1000"},
+		{name: "update-existing-install", machine: "aarch64", arch: "arm64", uid: "0", installed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.settings["MOCK_ARCH"] = test.machine
+			f.settings["MOCK_UID"] = test.uid
+			f.settings["MOCK_APP_EXISTS"] = "0"
+			f.settings["MOCK_INIT_STATUS"] = "42"
+			target := filepath.Join(f.prefix, "bin/mct-syslogger")
+			document := filepath.Join(f.prefix, "share/doc/mct-syslogger/tools/README.md")
+			if test.installed {
+				for _, path := range []string{target, document} {
+					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				writeFile(t, target, "old binary", 0o755)
+				writeFile(t, document, "old documentation", 0o644)
+			}
+			output, status := f.run(t, f.input("y"), true)
+			if status != 0 {
+				t.Fatalf("默认安装或更新失败: %d\n%s", status, output)
+			}
+			f.assertNoInit(t)
+			f.assertInstalled(t, test.arch)
+			if got := readLog(t, filepath.Join(f.log, "getent")); got != "" {
+				t.Fatalf("默认更新不应查询初始化账户: %q", got)
+			}
+			if readLog(t, target) != fakeCLI || readLog(t, document) != "使用说明" {
+				t.Fatal("默认模式未更新命令及配套文档")
+			}
+		})
+	}
+}
+
 func TestInstallerInstallsAndInitializes(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -325,7 +406,7 @@ func TestInstallerInstallsAndInitializes(t *testing.T) {
 				path := filepath.Join(f.assets, "SHA256SUMS")
 				writeFile(t, path, strings.ReplaceAll(readLog(t, path), "./mct-syslogger", "mct-syslogger"), 0o644)
 			}
-			output, status := f.run(t, f.input(test.capacity, "y"), true)
+			output, status := f.run(t, f.initInput(test.capacity, "y"), true, "--init")
 			if status != 0 {
 				t.Fatalf("安装失败: %d\n%s", status, output)
 			}
@@ -338,46 +419,28 @@ func TestInstallerInstallsAndInitializes(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("初始化参数不符: got=%q want=%q", got, want)
 			}
-			for path, mode := range map[string]os.FileMode{
-				"bin/mct-syslogger":                                    0o755,
-				"share/doc/mct-syslogger/tools/README.md":              0o644,
-				"share/doc/mct-syslogger/tools/THIRD_PARTY_NOTICES.md": 0o644,
-				"share/doc/mct-syslogger/docs/journal.md":              0o644,
-			} {
-				info, err := os.Stat(filepath.Join(f.prefix, path))
-				if err != nil || info.Mode().Perm() != mode {
-					t.Fatalf("安装文件或模式不符: %s, %v", path, err)
-				}
-			}
-			requests := strings.Split(strings.TrimSpace(readLog(t, filepath.Join(f.log, "curl"))), "\n")
-			wantRequests := []string{
-				"https://github.com/mctxyz/syslogger/releases/latest",
-				"https://github.com/mctxyz/syslogger/releases/download/test-release/mct-syslogger_linux_" + test.arch + ".tar.gz",
-				"https://github.com/mctxyz/syslogger/releases/download/test-release/SHA256SUMS",
-			}
-			if !reflect.DeepEqual(requests, wantRequests) {
-				t.Fatalf("下载未固定同一 tag: %q", requests)
-			}
-			usedSudo := readLog(t, filepath.Join(f.log, "sudo")) != ""
-			if usedSudo != (test.uid != "0") {
-				t.Fatalf("提权路径不符: %v", usedSudo)
-			}
+			f.assertInstalled(t, test.arch)
 		})
 	}
 }
 
 func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
-	for _, name := range []string{"cancel", "cancel-default-prefix", "no-tty", "eof", "unsupported-os", "unsupported-arch", "missing-app", "download", "bad-digest", "missing-digest", "duplicate-digest", "old-release", "single-space-release", "selectable-user-release", "unexpected-account-probe", "symlink", "release-url", "term", "interrupt"} {
+	for _, name := range []string{"cancel", "cancel-init", "cancel-default-prefix", "no-tty", "eof", "unsupported-os", "unsupported-arch", "missing-app", "download", "bad-digest", "missing-digest", "duplicate-digest", "old-release", "single-space-release", "selectable-user-release", "unexpected-account-probe", "symlink", "release-url", "term", "interrupt"} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			input, tty := f.input("", "y"), true
+			input, tty := f.input("y"), true
+			var args []string
 			expectedStatus := -1
 			switch name {
 			case "cancel":
-				input = f.input("", "n")
+				input = f.input("n")
+				expectedStatus = 0
+			case "cancel-init":
+				args = []string{"--init"}
+				input = f.initInput("", "n")
 				expectedStatus = 0
 			case "cancel-default-prefix":
-				input = "\n\n\n\n\nn\n"
+				input = "\nn\n"
 				expectedStatus = 0
 			case "no-tty":
 				tty = false
@@ -389,6 +452,7 @@ func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
 				f.settings["MOCK_ARCH"] = "riscv64"
 			case "missing-app":
 				f.settings["MOCK_APP_EXISTS"] = "0"
+				args = []string{"--init"}
 			case "download":
 				f.settings["MOCK_DOWNLOAD_FAIL"] = "1"
 			case "bad-digest":
@@ -418,7 +482,7 @@ func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
 				f.settings["MOCK_SIGNAL"] = "INT"
 				expectedStatus = 130
 			}
-			output, status := f.run(t, input, tty)
+			output, status := f.run(t, input, tty, args...)
 			if expectedStatus >= 0 {
 				if status != expectedStatus {
 					t.Fatalf("退出码不符: got=%d want=%d\n%s", status, expectedStatus, output)
@@ -439,30 +503,38 @@ func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
 
 func TestInstallerInstallFailureDoesNotRunOldBinary(t *testing.T) {
 	for _, failure := range []string{"sudo", "docs", "binary", "target-directory"} {
-		t.Run(failure, func(t *testing.T) {
-			f := newFixture(t)
-			target := filepath.Join(f.prefix, "bin/mct-syslogger")
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if failure == "target-directory" {
-				if err := os.Mkdir(target, 0o755); err != nil {
+		for _, initialize := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/init=%v", failure, initialize), func(t *testing.T) {
+				f := newFixture(t)
+				target := filepath.Join(f.prefix, "bin/mct-syslogger")
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 					t.Fatal(err)
 				}
-			} else {
-				writeFile(t, target, "#!/usr/bin/env bash\nprintf old > \"$MOCK_LOG/init\"\n", 0o755)
-			}
-			if failure == "sudo" {
-				f.settings["MOCK_SUDO_FAIL"] = "1"
-			} else {
-				f.settings["MOCK_INSTALL_FAIL"] = failure
-			}
-			output, status := f.run(t, f.input("", "y"), true)
-			if status == 0 {
-				t.Fatalf("安装失败仍返回成功: %s", output)
-			}
-			f.assertNoInit(t)
-		})
+				if failure == "target-directory" {
+					if err := os.Mkdir(target, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					writeFile(t, target, "#!/usr/bin/env bash\nprintf old > \"$MOCK_LOG/init\"\n", 0o755)
+				}
+				if failure == "sudo" {
+					f.settings["MOCK_SUDO_FAIL"] = "1"
+				} else {
+					f.settings["MOCK_INSTALL_FAIL"] = failure
+				}
+				input := f.input("y")
+				var args []string
+				if initialize {
+					input = f.initInput("", "y")
+					args = []string{"--init"}
+				}
+				output, status := f.run(t, input, true, args...)
+				if status == 0 {
+					t.Fatalf("安装失败仍返回成功: %s", output)
+				}
+				f.assertNoInit(t)
+			})
+		}
 	}
 }
 
@@ -471,7 +543,7 @@ func TestInstallerInputAndInitFailure(t *testing.T) {
 	f.settings["MOCK_INIT_STATUS"] = "42"
 	capacity := "5G; printf injected"
 	input := "relative\n" + f.prefix + "\n" + capacity + "\n\n\n\ny\n"
-	output, status := f.run(t, input, true)
+	output, status := f.run(t, input, true, "--init")
 	if status != 42 {
 		t.Fatalf("init 失败状态丢失: %d\n%s", status, output)
 	}
@@ -494,6 +566,29 @@ func TestInstallerHelpWithoutTerminal(t *testing.T) {
 		t.Fatal("帮助路径触发下载")
 	}
 	f.assertNoInit(t)
+}
+
+func TestInstallerRejectsArgumentsBeforeDownload(t *testing.T) {
+	for _, args := range [][]string{
+		{"--unknown"},
+		{"--init", "--unknown"},
+		{"--help", "--init"},
+		{"--init", "--init"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			f := newFixture(t)
+			output, status := f.run(t, "", false, args...)
+			if status == 0 {
+				t.Fatalf("无效参数未拒绝: %s", output)
+			}
+			f.assertNoInit(t)
+			for _, name := range []string{"curl", "install", "getent"} {
+				if got := readLog(t, filepath.Join(f.log, name)); got != "" {
+					t.Fatalf("无效参数触发了 %s: %q", name, got)
+				}
+			}
+		})
+	}
 }
 
 func TestDocumentedBootstrapPropagatesDownloadFailure(t *testing.T) {
