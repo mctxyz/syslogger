@@ -39,8 +39,30 @@ func journalMatchValues(args []string, prefix string) []string {
 	return values
 }
 
-// journalTestLines 模拟同字段 OR、跨字段 AND，以及原生条数限制；反转仍由 TestMain 统一执行。
+// journalTestNamespace 校验日志查询辅助进程支持的单组与原生合并入口。
+func journalTestNamespace(args []string) (string, error) {
+	namespaces := journalMatchValues(args, "--namespace=")
+	if len(namespaces) != 1 {
+		return "", fmt.Errorf("查询应指定一个 namespace 入口：%q", namespaces)
+	}
+	if namespaces[0] == "*" {
+		return namespaces[0], nil
+	}
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		if namespaces[0] == group.Namespace() {
+			return namespaces[0], nil
+		}
+	}
+	return "", fmt.Errorf("查询 namespace 不受支持：%q", namespaces[0])
+}
+
+// journalTestLines 先按 namespace 选择数据源，再模拟同字段 OR、跨字段 AND 及条数限制。
+// 反转仍由 TestMain 统一执行。
 func journalTestLines(args []string, entries []journalTestEntry) ([]string, error) {
+	namespace, err := journalTestNamespace(args)
+	if err != nil {
+		return nil, err
+	}
 	matches := map[string][]string{}
 	for _, argument := range args {
 		if strings.HasPrefix(argument, "--") {
@@ -53,6 +75,9 @@ func journalTestLines(args []string, entries []journalTestEntry) ([]string, erro
 	}
 	var lines []string
 	for _, entry := range entries {
+		if namespace != "*" && entry.Namespace != namespace {
+			continue
+		}
 		fields := map[string]string{
 			"_NAMESPACE":               entry.Namespace,
 			"PRIORITY":                 entry.Priority,
@@ -209,6 +234,10 @@ func TestJournalNativeSelectionParity(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{},
+		{"-l", "error"},
+		{"--include-level", "debug"},
+		{"--include-level", "info", "--include-level", "notice"},
+		{"-l", "warning", "--exclude-level", "warning"},
 		{"-l", "notice"},
 		{"-p", "first", "-p", "second", "-l", "warning"},
 		{"-p", "a b"},
@@ -266,6 +295,27 @@ func TestQueryNativePrefilterBeforeMatchLimit(t *testing.T) {
 		{name: "recent", args: []string{"-n", "2"}, want: wanted[1:], count: "scanned_lines=5 ", outcome: "limit"},
 		{name: "follow", args: []string{"-f", "-n", "2"}, want: wanted[:2], count: "scanned_lines=2 ", outcome: "limit"},
 		{name: "all", args: []string{"-n", "0"}, want: wanted, count: "scanned_lines=6 ", outcome: "eof"},
+		{
+			name:    "single-recent",
+			args:    []string{"--include-level", "warning", "-n", "2"},
+			want:    wanted[1:],
+			count:   "scanned_lines=5 ",
+			outcome: "limit",
+		},
+		{
+			name:    "single-follow",
+			args:    []string{"--include-level", "warning", "-f", "-n", "2"},
+			want:    wanted[:2],
+			count:   "scanned_lines=2 ",
+			outcome: "limit",
+		},
+		{
+			name:    "single-all",
+			args:    []string{"--include-level", "warning", "-n", "0"},
+			want:    wanted,
+			count:   "scanned_lines=6 ",
+			outcome: "eof",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fakeJournalEntries(t, entries)
@@ -386,20 +436,76 @@ func TestIndexedMetadataStillRechecksBody(t *testing.T) {
 
 func TestJournalGroupSelection(t *testing.T) {
 	for _, test := range []struct {
-		args []string
-		want []string
+		name      string
+		args      []string
+		namespace string
+		want      []string
 	}{
-		{args: []string{"--include-level", "debug"}, want: []string{"mct-syslogger-debug"}},
-		{args: []string{"--include-level", "notice"}, want: []string{"mct-syslogger-info"}},
-		{args: []string{"--include-level", "warning"}, want: []string{"mct-syslogger-warning"}},
-		{args: []string{"-l", "error"}, want: []string{"mct-syslogger-error"}},
-		{args: []string{"-l", "warning"}, want: []string{"mct-syslogger-warning", "mct-syslogger-error"}},
-		{args: []string{"--include-level", "debug", "--include-level", "error"}, want: []string{"mct-syslogger-debug", "mct-syslogger-error"}},
+		{
+			name:      "default-all",
+			namespace: "*",
+			want:      []string{"mct-syslogger-debug", "mct-syslogger-info", "mct-syslogger-warning", "mct-syslogger-error"},
+		},
+		{
+			name:      "debug-threshold-is-all",
+			args:      []string{"-l", "debug"},
+			namespace: "*",
+			want:      []string{"mct-syslogger-debug", "mct-syslogger-info", "mct-syslogger-warning", "mct-syslogger-error"},
+		},
+		{name: "debug-only", args: []string{"--include-level", "debug"}, namespace: "mct-syslogger-debug", want: []string{"mct-syslogger-debug"}},
+		{name: "notice-only", args: []string{"--include-level", "notice"}, namespace: "mct-syslogger-info", want: []string{"mct-syslogger-info"}},
+		{name: "info-only", args: []string{"--include-level", "info"}, namespace: "mct-syslogger-info", want: []string{"mct-syslogger-info"}},
+		{name: "warning-only", args: []string{"--include-level", "warning"}, namespace: "mct-syslogger-warning", want: []string{"mct-syslogger-warning"}},
+		{name: "error-only", args: []string{"--include-level", "error"}, namespace: "mct-syslogger-error", want: []string{"mct-syslogger-error"}},
+		{name: "error-threshold", args: []string{"-l", "error"}, namespace: "mct-syslogger-error", want: []string{"mct-syslogger-error"}},
+		{
+			name:      "info-and-notice-share-source",
+			args:      []string{"--include-level", "info", "--include-level", "notice"},
+			namespace: "mct-syslogger-info",
+			want:      []string{"mct-syslogger-info"},
+		},
+		{
+			name:      "multiple-severe-levels-share-source",
+			args:      []string{"--include-level", "error", "--include-level", "critical"},
+			namespace: "mct-syslogger-error",
+			want:      []string{"mct-syslogger-error"},
+		},
+		{
+			name:      "exclude-collapses-threshold",
+			args:      []string{"-l", "warning", "--exclude-level", "warning"},
+			namespace: "mct-syslogger-error",
+			want:      []string{"mct-syslogger-error"},
+		},
+		{
+			name:      "exclude-collapses-includes",
+			args:      []string{"--include-level", "error", "--include-level", "debug", "--exclude-level", "error"},
+			namespace: "mct-syslogger-debug",
+			want:      []string{"mct-syslogger-debug"},
+		},
+		{
+			name:      "threshold-intersects-includes",
+			args:      []string{"-l", "warning", "--include-level", "info", "--include-level", "error"},
+			namespace: "mct-syslogger-error",
+			want:      []string{"mct-syslogger-error"},
+		},
+		{name: "warning-threshold", args: []string{"-l", "warning"}, namespace: "*", want: []string{"mct-syslogger-warning", "mct-syslogger-error"}},
+		{name: "noncontiguous-groups", args: []string{"--include-level", "debug", "--include-level", "error"}, namespace: "*", want: []string{"mct-syslogger-debug", "mct-syslogger-error"}},
+		{
+			name:      "empty-after-exclude",
+			args:      []string{"--include-level", "error", "--exclude-level", "error"},
+			namespace: "*",
+			want:      []string{"mct-syslogger-debug", "mct-syslogger-info", "mct-syslogger-warning", "mct-syslogger-error"},
+		},
 	} {
-		args := testOptions(t, test.args...).journalArgs()
-		if got := journalMatchValues(args, "_NAMESPACE="); !reflect.DeepEqual(got, test.want) {
-			t.Fatalf("空间选择错误: args=%v got=%v want=%v", test.args, got, test.want)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			args := testOptions(t, test.args...).journalArgs()
+			if got := journalMatchValues(args, "--namespace="); !reflect.DeepEqual(got, []string{test.namespace}) {
+				t.Fatalf("数据源选择错误: args=%v got=%v want=%v", test.args, got, test.namespace)
+			}
+			if got := journalMatchValues(args, "_NAMESPACE="); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("空间选择错误: args=%v got=%v want=%v", test.args, got, test.want)
+			}
+		})
 	}
 	wanted := moduleJournalEntry(t, "wanted", "project", "main", "rpc", logging.Error)
 	unrelated := wanted
@@ -413,5 +519,32 @@ func TestJournalGroupSelection(t *testing.T) {
 	}
 	if output.String() != wanted.Message+"\n" {
 		t.Fatalf("混入了范围外 namespace: %s", &output)
+	}
+}
+
+func TestJournalNamespaceSourceSelection(t *testing.T) {
+	var entries []journalTestEntry
+	for _, namespace := range []string{
+		"mct-syslogger-debug", "mct-syslogger-info", "mct-syslogger-warning", "mct-syslogger-error", "unrelated", "",
+	} {
+		entries = append(entries, journalTestEntry{Message: namespace + "-message", Namespace: namespace})
+	}
+	for _, namespace := range []string{"mct-syslogger-debug", "mct-syslogger-info", "mct-syslogger-warning", "mct-syslogger-error", "*"} {
+		t.Run(namespace, func(t *testing.T) {
+			// 省略字段匹配，独立验证精确 namespace 本身会收窄数据源。
+			lines, err := journalTestLines([]string{"--namespace=" + namespace}, entries)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var expected []string
+			for _, entry := range entries {
+				if namespace == "*" || entry.Namespace == namespace {
+					expected = append(expected, entry.Message)
+				}
+			}
+			if !reflect.DeepEqual(lines, expected) {
+				t.Fatalf("namespace 数据源过滤错误：got=%q want=%q", lines, expected)
+			}
+		})
 	}
 }

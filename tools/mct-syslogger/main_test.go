@@ -692,8 +692,8 @@ func TestMain(m *testing.M) {
 		os.Exit(mainCode())
 	}
 	if os.Getenv("SYSLOGGER_LOG_TEST_HELPER") == "1" {
-		if got := journalMatchValues(os.Args[1:], "--namespace="); !reflect.DeepEqual(got, []string{"*"}) {
-			fmt.Fprintf(os.Stderr, "journal namespace mismatch: %q\n", got)
+		if _, err := journalTestNamespace(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
 		if os.Getenv("SYSLOGGER_LOG_TEST_MODE") == "fail" {

@@ -13,18 +13,30 @@ import (
 )
 
 func (opts options) journalArgs() []string {
-	args := []string{
-		"--no-pager",
-		"--namespace=*",
-		"--output=cat",
-		"--all",
-		"--since=" + opts.since,
-	}
 	var selected [journalwire.GroupCount]bool
 	for severity, name := range levels {
 		if contains(opts.levels, name) {
 			selected[journalwire.GroupForSeverity(uint8(severity))] = true
 		}
+	}
+	// 最终等级只落入一组时直接选源；多组由原生 journal 合并，空集合保留查询错误反馈。
+	namespace := "*"
+	groupCount := 0
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		if selected[group] {
+			namespace = group.Namespace()
+			groupCount++
+		}
+	}
+	if groupCount != 1 {
+		namespace = "*"
+	}
+	args := []string{
+		"--no-pager",
+		"--namespace=" + namespace,
+		"--output=cat",
+		"--all",
+		"--since=" + opts.since,
 	}
 	// 原生 namespace 字段限制返回范围；空等级仍保留空间边界，再由 PRIORITY 表达无结果。
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {

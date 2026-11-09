@@ -73,12 +73,13 @@ func TestDebugFilterCountsAndFields(t *testing.T) {
 
 func TestQueryDebugSummary(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		mode    string
-		args    []string
-		outcome string
-		wantErr bool
-		wantLog bool
+		name      string
+		mode      string
+		args      []string
+		namespace string
+		outcome   string
+		wantErr   bool
+		wantLog   bool
 	}{
 		{name: "eof", mode: "success", args: []string{"--debug", "-n", "0"}, outcome: "eof", wantLog: true},
 		{name: "limit", mode: "hold", args: []string{"--debug", "-f", "-n", "1"}, outcome: "limit", wantLog: true},
@@ -86,6 +87,45 @@ func TestQueryDebugSummary(t *testing.T) {
 		{name: "journal-error", mode: "fail", args: []string{"--debug"}, outcome: "error", wantErr: true},
 		{name: "disabled", mode: "success", args: []string{"--debug=false"}, wantLog: true},
 		{name: "level-only", mode: "success", args: []string{"-l", "debug"}, wantLog: true},
+		{
+			name:      "single-include",
+			mode:      "success",
+			args:      []string{"--debug", "--include-level", "error", "-n", "0"},
+			namespace: "mct-syslogger-error",
+			outcome:   "eof",
+			wantLog:   true,
+		},
+		{
+			name:      "single-exclude-limit",
+			mode:      "hold",
+			args:      []string{"--debug", "-l", "warning", "--exclude-level", "warning", "-n", "1"},
+			namespace: "mct-syslogger-error",
+			outcome:   "limit",
+			wantLog:   true,
+		},
+		{
+			name:      "single-follow-limit",
+			mode:      "hold",
+			args:      []string{"--debug", "--include-level", "error", "-f", "-n", "1"},
+			namespace: "mct-syslogger-error",
+			outcome:   "limit",
+			wantLog:   true,
+		},
+		{
+			name:      "single-no-match",
+			mode:      "success",
+			args:      []string{"--debug", "--include-level", "debug"},
+			namespace: "mct-syslogger-debug",
+			outcome:   "eof",
+		},
+		{
+			name:      "single-journal-error",
+			mode:      "fail",
+			args:      []string{"--debug", "--include-level", "error"},
+			namespace: "mct-syslogger-error",
+			outcome:   "error",
+			wantErr:   true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fakeJournal(t, test.mode)
@@ -122,6 +162,13 @@ func TestQueryDebugSummary(t *testing.T) {
 			}
 			if strings.Count(diagnostics.String(), "[debug] query:") != 1 || strings.Contains(diagnostics.String(), `"--debug"`) {
 				t.Fatal("统计应只汇总一次，且 debug 参数不应传给 journalctl")
+			}
+			namespace := test.namespace
+			if namespace == "" {
+				namespace = "*"
+			}
+			if !strings.Contains(diagnostics.String(), fmt.Sprintf("%q", "--namespace="+namespace)) {
+				t.Fatalf("诊断未反映实际 namespace 数据源：%s", diagnostics.String())
 			}
 			if test.name == "no-match" && !strings.Contains(diagnostics.String(), "match=n/a output=n/a") {
 				t.Fatal("无匹配时不应伪造首匹配或首输出时间")
@@ -174,32 +221,42 @@ func TestDebugEmptyInput(t *testing.T) {
 }
 
 func TestQueryDebugCancellationAndOutputErrors(t *testing.T) {
-	for _, canceled := range []bool{false, true} {
-		t.Run(fmt.Sprint(canceled), func(t *testing.T) {
-			fakeJournal(t, "hold")
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			outputErr := errors.New("output closed")
-			writer := callbackWriter{write: func() error {
+	for _, source := range []struct {
+		namespace string
+		args      []string
+	}{
+		{namespace: "*"},
+		{namespace: "mct-syslogger-error", args: []string{"--include-level", "error"}},
+	} {
+		for _, canceled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/canceled=%v", source.namespace, canceled), func(t *testing.T) {
+				fakeJournal(t, "hold")
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				outputErr := errors.New("output closed")
+				writer := callbackWriter{write: func() error {
+					if canceled {
+						cancel()
+						return nil
+					}
+					return outputErr
+				}}
+				var diagnostics bytes.Buffer
+				args := append([]string{"--debug", "-f"}, source.args...)
+				err := query(ctx, testOptions(t, args...), writer, &diagnostics)
+				wantErr, outcome := outputErr, "error"
 				if canceled {
-					cancel()
-					return nil
+					wantErr, outcome = context.Canceled, "canceled"
 				}
-				return outputErr
-			}}
-			var diagnostics bytes.Buffer
-			err := query(ctx, testOptions(t, "--debug", "-f"), writer, &diagnostics)
-			wantErr, outcome := outputErr, "error"
-			if canceled {
-				wantErr, outcome = context.Canceled, "canceled"
-			}
-			if !errors.Is(err, wantErr) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				t.Fatalf("诊断改变了取消或输出错误：%v", err)
-			}
-			if !strings.Contains(diagnostics.String(), "stop="+outcome) {
-				t.Fatalf("诊断未反映实际停止原因：%s", diagnostics.String())
-			}
-		})
+				if !errors.Is(err, wantErr) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					t.Fatalf("诊断改变了取消或输出错误：%v", err)
+				}
+				if !strings.Contains(diagnostics.String(), "stop="+outcome) ||
+					!strings.Contains(diagnostics.String(), fmt.Sprintf("%q", "--namespace="+source.namespace)) {
+					t.Fatalf("诊断未反映实际数据源或停止原因：%s", diagnostics.String())
+				}
+			})
+		}
 	}
 }
 

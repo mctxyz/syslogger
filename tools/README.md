@@ -128,7 +128,7 @@ sudo usermod -aG systemd-journal username
 
 退出并重新登录后组权限生效。命令的 `--help` 提供查询流程和排障提示，账户权限由管理员按本节配置。
 
-日志查询使用一个 `journalctl --namespace='*'`，以所选等级组的精确 `_NAMESPACE` 条件限定返回范围，身份、等级、时间及跟踪参数继续按下文组合。各组独立管理容量、轮转和压缩；原生 `log` 兜底继续由宿主程序的 stderr／标准日志配置接管。SDK、CLI 和主机入口需配套升级，见[升级与手动清理](../docs/journal.md#升级与手动清理旧空间)。
+日志查询根据 `-l` 阈值、`--include-level` 和 `--exclude-level` 合并后的有效等级集合自动选择空间。只涉及一组时使用一个 `journalctl --namespace=<该组完整名称>` 精确选源；涉及多组时使用一个 `journalctl --namespace='*'`，以所选组的精确 `_NAMESPACE` 条件限定返回范围，由原生 journal 合并记录。身份、等级、时间及跟踪参数继续按下文组合。`-l error` 选择 error 组，`--include-level debug` 只选择 debug 组，info 与 notice 同选仍只打开 info 组；默认或 `-l debug` 表示全部八级，查询四组。各组独立管理容量、轮转和压缩；原生 `log` 兜底继续由宿主程序的 stderr／标准日志配置接管。SDK、CLI 和主机入口需配套升级，见[升级与手动清理](../docs/journal.md#升级与手动清理旧空间)。
 
 ## 初始化主机
 

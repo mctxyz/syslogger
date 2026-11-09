@@ -121,7 +121,7 @@ mct-syslogger -p contract-listener -i mainnet-a -c rpc
 mct-syslogger -p contract-listener -s now -f
 ```
 
-CLI 使用 `journalctl --namespace='*'` 加所选组的精确 `_NAMESPACE` 条件，由原生 journal 合并记录。通配入口会枚举可访问的 namespace，匹配条件限定返回范围。普通 `journalctl` 显示默认命名空间；读取权限沿用系统 journal 的组和 ACL 配置，namespace 用于日志流及留存隔离，不是管理员权限隔离。
+CLI 根据等级阈值、include 和 exclude 合并后的最终等级集合推导空间。只涉及一组时使用 `journalctl --namespace=<该组完整名称>`，直接限制打开的数据源；多组使用 `journalctl --namespace='*'` 加所选组的精确 `_NAMESPACE` 条件，由原生 journal 合并记录。通配入口会枚举可访问的 namespace，匹配条件限定返回范围。默认和 `-l debug` 查询四组；仅 debug 使用 `--include-level debug`，`-l error` 或 `-l warning --exclude-level warning` 则只打开 error 组。普通 `journalctl` 显示默认命名空间；读取权限沿用系统 journal 的组和 ACL 配置，namespace 用于日志流及留存隔离，不是管理员权限隔离。
 
 先完成四个空间的 init，再启动查询与跟踪。本机 systemd 257 验证中，跟踪启动后才新增的整个 namespace 不会自动纳入；如期间创建或重建了 namespace 目录，应重新启动跟踪。已准备空间内的新日志和正常文件轮转继续由原生监听处理。
 
