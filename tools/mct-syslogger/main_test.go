@@ -126,7 +126,7 @@ func TestVersionDispatch(t *testing.T) {
 	if opts := testOptions(t, "--version=false"); opts.version {
 		t.Fatal("显式关闭版本参数未生效")
 	}
-	for _, args := range [][]string{{"--version"}, {"--version", "--list"}, {"--version", "--ranges"}} {
+	for _, args := range [][]string{{"--version"}, {"--version", "--list"}, {"--version", "--ranges"}, {"--version", "--colour"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -143,6 +143,44 @@ func TestVersionDispatch(t *testing.T) {
 				t.Fatalf("版本未独立输出到 stdout: stdout=%q stderr=%q", &output, &diagnostics)
 			}
 		})
+	}
+}
+
+func TestModeModifiers(t *testing.T) {
+	for _, mode := range []string{"--list", "--ranges"} {
+		for _, modifiers := range [][]string{
+			{"--colour"},
+			{"--colour=false"},
+			{"--json", "--colour"},
+			{"--debug"},
+			{"--debug=false"},
+			{"--ignore-case"},
+			{"--follow=false"},
+			{"-f=false"},
+			{"--version=false"},
+			{"--json", "--colour", "--debug", "--ignore-case"},
+		} {
+			args := append([]string{mode}, modifiers...)
+			if _, err := parseOptions(args, io.Discard); err != nil {
+				t.Fatalf("修饰项或关闭的选项产生冲突：%v %v", args, err)
+			}
+		}
+	}
+	for _, args := range [][]string{
+		{"--list", "--ranges=false", "--colour"},
+		{"--ranges", "--list=false", "--colour"},
+	} {
+		if _, err := parseOptions(args, io.Discard); err != nil {
+			t.Fatalf("关闭的另一模式产生冲突：%v %v", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"--list", "--ranges"},
+		{"--ranges", "--list", "--colour"},
+	} {
+		if _, err := parseOptions(args, io.Discard); err == nil {
+			t.Fatalf("同时开启了不同的查询模式：%v", args)
+		}
 	}
 }
 

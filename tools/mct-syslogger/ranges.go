@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -85,7 +86,7 @@ func journalBoundary(ctx context.Context, namespace string, latest bool, diagnos
 }
 
 // showRanges 每次重新读取四空间，查询完成后统一输出，失败时不输出部分概览。
-func showRanges(ctx context.Context, asJSON bool, output, diagnostics io.Writer) error {
+func showRanges(ctx context.Context, asJSON, colour bool, output, diagnostics io.Writer) error {
 	ranges := make([]journalRange, 0, journalwire.GroupCount)
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
 		current := journalRange{Namespace: group.Namespace()}
@@ -108,19 +109,26 @@ func showRanges(ctx context.Context, asJSON bool, output, diagnostics io.Writer)
 	if asJSON {
 		return json.NewEncoder(output).Encode(ranges)
 	}
-	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "NAMESPACE\tFIRST_ENTRY\tLAST_ENTRY"); err != nil {
-		return err
-	}
+	// 先对齐纯文本，再为固定空间名称着色，避免 ANSI 序列被计入列宽。
+	var table strings.Builder
+	writer := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "NAMESPACE\tFIRST_ENTRY\tLAST_ENTRY")
 	for _, current := range ranges {
 		first, last := "-", "-"
 		if current.FirstEntry != nil {
 			first = current.FirstEntry.Local().Format("2006-01-02 15:04:05 -0700")
 			last = current.LastEntry.Local().Format("2006-01-02 15:04:05 -0700")
 		}
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\n", current.Namespace, first, last); err != nil {
-			return err
+		fmt.Fprintf(writer, "%s\t%s\t%s\n", current.Namespace, first, last)
+	}
+	writer.Flush()
+	text := table.String()
+	if colour {
+		for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+			namespace := group.Namespace()
+			text = strings.Replace(text, namespace, colourText(namespace, levelColours[group.Name()]), 1)
 		}
 	}
-	return writer.Flush()
+	_, err := fmt.Fprint(output, text)
+	return err
 }

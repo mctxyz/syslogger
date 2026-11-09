@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -135,11 +136,14 @@ func TestRangeOptions(t *testing.T) {
 	if opts := testOptions(t, "--ranges=false"); opts.ranges {
 		t.Fatal("显式关闭空间范围模式未生效")
 	}
+	if opts := testOptions(t, "--ranges", "--colour", "--json"); !opts.colour || !opts.asJSON {
+		t.Fatal("空间范围模式没有保留显示选项")
+	}
 	for _, extra := range [][]string{
 		{"--list"}, {"-p", "example-project"}, {"-i", "example-instance"}, {"-c", "example-component"},
 		{"-l", "debug"}, {"--include-level", "info"}, {"--exclude-level", "debug"},
 		{"-s=-1h"}, {"-u", "now"}, {"-n", "1"}, {"-f"},
-		{"-k", "message"}, {"-e", "message"}, {"--ignore-case"}, {"--debug"}, {"--colour"},
+		{"-k", "message"}, {"-e", "message"},
 	} {
 		args := append([]string{"--ranges"}, extra...)
 		if _, err := parseOptions(args, io.Discard); err == nil {
@@ -155,7 +159,7 @@ func TestRangesJSONAndLocalText(t *testing.T) {
 	time.Local = time.FixedZone("local", 5*60*60+45*60)
 	t.Cleanup(func() { time.Local = original })
 	var output bytes.Buffer
-	if err := showRanges(context.Background(), true, &output, io.Discard); err != nil {
+	if err := showRanges(context.Background(), true, false, &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var got []journalRange
@@ -186,8 +190,9 @@ func TestRangesJSONAndLocalText(t *testing.T) {
 	if strings.Contains(output.String(), "+05:45") || !strings.Contains(output.String(), ".123456Z") {
 		t.Fatalf("JSON 未保持 UTC 和微秒精度：%s", &output)
 	}
+	jsonOutput := output.String()
 	output.Reset()
-	if err := showRanges(context.Background(), false, &output, io.Discard); err != nil {
+	if err := showRanges(context.Background(), false, false, &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	rows := strings.Split(strings.TrimSpace(output.String()), "\n")
@@ -199,6 +204,27 @@ func TestRangesJSONAndLocalText(t *testing.T) {
 	}
 	if got := strings.Fields(rows[3]); !reflect.DeepEqual(got, []string{journalwire.WarningGroup.Namespace(), "-", "-"}) {
 		t.Fatalf("空空间没有明确显示缺少边界：%q", rows[3])
+	}
+	plain := output.String()
+	output.Reset()
+	if err := showRanges(context.Background(), false, true, &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	if ansi.ReplaceAllString(output.String(), "") != plain {
+		t.Fatalf("着色改变了文本或列对齐：%q", &output)
+	}
+	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
+		if !strings.Contains(output.String(), colourText(group.Namespace(), levelColours[group.Name()])) {
+			t.Fatalf("空间 %s 没有采用对应等级的颜色", group.Namespace())
+		}
+	}
+	output.Reset()
+	if err := showRanges(context.Background(), true, true, &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != jsonOutput {
+		t.Fatalf("JSON 输出受颜色开关影响：%q", &output)
 	}
 }
 
@@ -231,7 +257,7 @@ func TestRangesErrorsAndCancellation(t *testing.T) {
 			fixtures[journalwire.DebugGroup.Namespace()] = test.fixture
 			fakeRanges(t, fixtures)
 			var output, diagnostics bytes.Buffer
-			err := showRanges(context.Background(), true, &output, &diagnostics)
+			err := showRanges(context.Background(), true, false, &output, &diagnostics)
 			if err == nil {
 				t.Fatal("查询错误被吞掉")
 			}
@@ -248,7 +274,7 @@ func TestRangesErrorsAndCancellation(t *testing.T) {
 	}
 	t.Run("missing-journalctl", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
-		if err := showRanges(context.Background(), false, io.Discard, io.Discard); err == nil {
+		if err := showRanges(context.Background(), false, false, io.Discard, io.Discard); err == nil {
 			t.Fatal("缺少 journalctl 没有明确报错")
 		}
 	})
@@ -258,7 +284,7 @@ func TestRangesErrorsAndCancellation(t *testing.T) {
 		fakeRanges(t, fixtures)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		if err := showRanges(ctx, true, io.Discard, io.Discard); !errors.Is(err, context.DeadlineExceeded) {
+		if err := showRanges(ctx, true, false, io.Discard, io.Discard); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("取消没有传回调用方：%v", err)
 		}
 	})
@@ -269,7 +295,7 @@ func TestRangesConcurrentCleanupAndOutputFailure(t *testing.T) {
 	fixtures[journalwire.DebugGroup.Namespace()] = rangeFixture{First: "1000000"}
 	fakeRanges(t, fixtures)
 	var output bytes.Buffer
-	if err := showRanges(context.Background(), true, &output, io.Discard); err != nil {
+	if err := showRanges(context.Background(), true, false, &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var got []journalRange
@@ -280,24 +306,40 @@ func TestRangesConcurrentCleanupAndOutputFailure(t *testing.T) {
 		t.Fatalf("两次查询之间清空空间后未保持空端点一致：%s", &output)
 	}
 	writer := &callbackWriter{write: func() error { return syscall.EPIPE }}
-	if err := showRanges(context.Background(), false, writer, io.Discard); !errors.Is(err, syscall.EPIPE) {
+	if err := showRanges(context.Background(), false, true, writer, io.Discard); !errors.Is(err, syscall.EPIPE) {
 		t.Fatalf("输出错误未传回主入口：%v", err)
 	}
 }
 
 func TestRangesMainDispatch(t *testing.T) {
 	fakeRanges(t, rangeFixtures())
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, os.Args[0], "--ranges", "--json")
-	var output, diagnostics bytes.Buffer
-	command.Stdout = &output
-	command.Stderr = &diagnostics
-	if err := command.Run(); err != nil || diagnostics.Len() != 0 {
-		t.Fatalf("空间范围主入口失败：%v %s", err, &diagnostics)
-	}
-	var got []journalRange
-	if err := json.Unmarshal(output.Bytes(), &got); err != nil || len(got) != int(journalwire.GroupCount) {
-		t.Fatalf("空间范围主入口没有返回完整 JSON：%s, %v", &output, err)
+	for _, args := range [][]string{
+		{"--ranges", "--json"},
+		{"--ranges", "--colour", "--json", "--debug", "--ignore-case", "--list=false", "--follow=false"},
+		{"--ranges", "--colour"},
+		{"--ranges", "--colour=false"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], args...)
+			var output, diagnostics bytes.Buffer
+			command.Stdout = &output
+			command.Stderr = &diagnostics
+			if err := command.Run(); err != nil || diagnostics.Len() != 0 {
+				t.Fatalf("空间范围主入口失败：%v %s", err, &diagnostics)
+			}
+			if contains(args, "--json") {
+				var got []journalRange
+				if err := json.Unmarshal(output.Bytes(), &got); err != nil || len(got) != int(journalwire.GroupCount) {
+					t.Fatalf("空间范围主入口没有返回完整 JSON：%s, %v", &output, err)
+				}
+				if strings.Contains(output.String(), "\x1b[") {
+					t.Fatal("JSON 中混入了 ANSI 转义序列")
+				}
+			} else if strings.Contains(output.String(), "\x1b[") != contains(args, "--colour") {
+				t.Fatal("主入口未正确传递颜色开关")
+			}
+		})
 	}
 }

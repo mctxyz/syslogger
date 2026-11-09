@@ -139,7 +139,7 @@ func TestHelpExamples(t *testing.T) {
 			var output bytes.Buffer
 			if opts.ranges {
 				fakeRanges(t, rangeFixtures())
-				if err := showRanges(context.Background(), opts.asJSON, &output, io.Discard); err != nil {
+				if err := showRanges(context.Background(), opts.asJSON, opts.colour, &output, io.Discard); err != nil {
 					t.Fatal(err)
 				}
 			} else if opts.list {

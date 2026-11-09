@@ -63,9 +63,6 @@ func TestCatalogOptions(t *testing.T) {
 		{"--list", "--exclude-level", "debug"},
 		{"--list", "-k", "rpc"},
 		{"--list", "-e", "rpc"},
-		{"--list", "--ignore-case"},
-		{"--list", "--debug"},
-		{"--list", "--debug=false"},
 	} {
 		if _, err := parseOptions(args, io.Discard); err == nil {
 			t.Fatalf("目录查询静默忽略了日志参数: %v", args)

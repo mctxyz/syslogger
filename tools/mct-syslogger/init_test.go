@@ -21,6 +21,12 @@ func TestInitOptionsStaySeparate(t *testing.T) {
 	if err != nil || opts.JournalMaxUse != [journalwire.GroupCount]string{"1G", "10G", "1G", "1G"} {
 		t.Fatalf("容量参数未生效: %+v %v", opts, err)
 	}
+	for _, args := range [][]string{{"--colour"}, {"--colour=false"}} {
+		opts, err := parseInitOptions(args, io.Discard)
+		if err != nil || opts.JournalMaxUse != [journalwire.GroupCount]string{"1G", "2G", "1G", "1G"} {
+			t.Fatalf("初始化的颜色修饰项影响了配置：%v %+v %v", args, opts, err)
+		}
+	}
 	for _, args := range [][]string{{"--user", "app"}, {"--list"}, {"--project", "demo"}, {"--journal-debug-max-use", "0"}, {"--journal-max-use", "5G"}, {"positional"}} {
 		if _, err := parseInitOptions(args, io.Discard); err == nil {
 			t.Fatalf("初始化接受了无效参数: %v", args)
@@ -40,8 +46,14 @@ func TestInitOptionsStaySeparate(t *testing.T) {
 func TestInitDispatchHelp(t *testing.T) {
 	previous := os.Args
 	t.Cleanup(func() { os.Args = previous })
-	os.Args = []string{"mct-syslogger", "init", "--help"}
-	if code := mainCode(); code != 0 {
-		t.Fatalf("init 子命令没有被独立分发: %d", code)
+	for _, args := range [][]string{
+		{"mct-syslogger", "init", "--help"},
+		{"mct-syslogger", "init", "--colour", "--help"},
+		{"mct-syslogger", "init", "--colour=false", "--help"},
+	} {
+		os.Args = args
+		if code := mainCode(); code != 0 {
+			t.Fatalf("init 子命令没有被独立分发: %v %d", args, code)
+		}
 	}
 }

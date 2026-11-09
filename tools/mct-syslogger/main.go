@@ -50,7 +50,7 @@ func mainCode() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if opts.ranges {
-		err = showRanges(ctx, opts.asJSON, os.Stdout, os.Stderr)
+		err = showRanges(ctx, opts.asJSON, opts.colour, os.Stdout, os.Stderr)
 	} else {
 		err = query(ctx, opts, os.Stdout, os.Stderr)
 	}

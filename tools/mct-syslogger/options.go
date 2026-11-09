@@ -85,9 +85,9 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	flags.BoolVar(&opts.follow, "follow", false, "持续跟踪，默认先读历史；-s now 只看新日志")
 	flags.BoolVar(&opts.asJSON, "json", false, "机器可读输出：目录和空间范围为数组，日志为 NDJSON")
 	flags.BoolVar(&opts.ignoreKeywordCase, "ignore-case", false, "仅让 -k 关键词忽略大小写")
-	flags.BoolVar(&opts.colour, "colour", false, "启用 ANSI 彩色输出；默认关闭，--colour=false 关闭")
+	flags.BoolVar(&opts.colour, "colour", false, "启用 ANSI 彩色可读输出；JSON、版本与初始化输出忽略；默认关闭")
 	flags.BoolVar(&opts.list, "list", false, "列出本机项目 → 实例 → 组件；支持 -p / -i / -c")
-	flags.BoolVar(&opts.ranges, "ranges", false, "查询四个日志空间当前可读记录的最早和最新时间；支持 --json")
+	flags.BoolVar(&opts.ranges, "ranges", false, "查询四个日志空间当前可读记录的最早和最新时间；支持 --json / --colour")
 	flags.BoolVar(&opts.debug, "debug", false, "向 stderr 输出查询耗时和扫描统计，与 -l debug 无关")
 	flags.BoolVar(&opts.version, "version", false, "显示编译版本并退出")
 	for _, group := range optionGroups {
@@ -116,30 +116,33 @@ func parseOptions(args []string, help io.Writer) (options, error) {
 	if opts.follow && opts.until != "" {
 		return opts, errors.New("--follow 用于跟踪新日志，--until 用于固定时间段查询，请分别使用")
 	}
-	if opts.list {
-		var incompatible string
-		flags.Visit(func(option *flag.Flag) {
-			switch option.Name {
-			case "list", "project", "p", "instance-id", "i", "component", "c", "json", "colour":
-			default:
-				incompatible = option.Name
-			}
-		})
-		if incompatible != "" {
-			return opts, fmt.Errorf("--list 仅支持身份筛选和输出格式，不能同时使用 --%s", incompatible)
-		}
+	if opts.list && opts.ranges {
+		return opts, errors.New("--list 与 --ranges 是不同查询模式，不能同时开启")
 	}
-	if opts.ranges {
+	if opts.list || opts.ranges {
+		mode := "--ranges"
+		if opts.list {
+			mode = "--list"
+		}
 		var incompatible string
 		flags.Visit(func(option *flag.Flag) {
 			switch option.Name {
-			case "ranges", "json":
-			default:
-				incompatible = option.Name
+			// 修饰项仅在对应功能中生效，关闭的模式和跟踪选项也可组合使用。
+			case "list", "ranges", "version", "json", "colour", "debug", "ignore-case":
+				return
+			case "follow", "f":
+				if !opts.follow {
+					return
+				}
+			case "project", "p", "instance-id", "i", "component", "c":
+				if opts.list {
+					return
+				}
 			}
+			incompatible = option.Name
 		})
 		if incompatible != "" {
-			return opts, fmt.Errorf("--ranges 仅支持 --json，不能同时使用 --%s", incompatible)
+			return opts, fmt.Errorf("--%s 不适用于 %s 模式", incompatible, mode)
 		}
 	}
 	linesSet := false

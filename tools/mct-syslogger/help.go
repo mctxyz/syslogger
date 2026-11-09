@@ -78,7 +78,7 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 用法：
   mct-syslogger --version
   mct-syslogger --list [身份筛选] [--json] [--colour]
-  mct-syslogger --ranges [--json]
+  mct-syslogger --ranges [--json] [--colour]
   mct-syslogger [身份筛选] [日志过滤参数] [输出参数]
   身份筛选：-p PROJECT、-i INSTANCE、-c COMPONENT，均可省略或重复。
 
@@ -98,6 +98,8 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
 
   查看四个日志空间当前可查询的首尾时间：
     mct-syslogger --ranges
+  按空间等级着色显示：
+    mct-syslogger --ranges --colour
   输出 JSON 数组供脚本读取：
     mct-syslogger --ranges --json
   FIRST_ENTRY / LAST_ENTRY 是当前权限可读记录的首尾时间；- 表示暂无可读记录。
@@ -162,8 +164,11 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
     如 -s=-2h，或 -s '2026-11-05 09:00:00 UTC' -u '2026-11-05 10:00:00 UTC'。
   跟踪：-f 按 -s 读取历史后等待新日志；默认近 1 小时，-s now -f 只看新日志。
     跟踪默认不限条数；-n N 同时计入历史和新日志，达到后退出；-f 与 -u 不能同用。
-  目录：--list 只接受身份筛选、--json、--colour，不接受时间、等级和内容过滤。
-  空间范围：--ranges 只接受 --json；按 journal 收录时间查询，不受日志默认近 1 小时限制。
+  目录：--list 支持身份筛选和输出格式；时间、等级和内容等日志筛选用于日志查询。
+  空间范围：--ranges 支持 --json、--colour；按整个空间的 journal 收录时间查询。
+  模式：--list 与 --ranges 不能同时开启；显式设置为 false 的模式或跟踪选项不产生互斥。
+  修饰项：--colour 不参与互斥，JSON、版本和 init 输出不着色；--debug 仅日志查询生效。
+    --ignore-case 仅作用于 -k；缺少对应功能时忽略修饰项，不影响目录身份匹配。
   写法：大写名称是待替换的参数值；含空格或正则的值加引号；查询条件都通过参数传入。
 
 4. Agent / 脚本怎么用

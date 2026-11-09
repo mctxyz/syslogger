@@ -18,6 +18,8 @@ func parseInitOptions(args []string, help io.Writer) (hostinit.Options, error) {
 	var opts hostinit.Options
 	flags := flag.NewFlagSet("mct-syslogger init", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	// 初始化输出保持纯文本，统一接受显示修饰项而不向主机配置传递。
+	flags.Bool("colour", false, "接受显示开关，初始化输出保持纯文本")
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
 		flags.StringVar(&opts.JournalMaxUse[group], "journal-"+group.Name()+"-max-use", hostinit.DefaultJournalMaxUse(group), "该等级空间的持久化容量 `SIZE`，正整数及可选 K/M/G/T/P/E 单位")
 	}
@@ -33,6 +35,7 @@ func parseInitOptions(args []string, help io.Writer) (hostinit.Options, error) {
   --journal-info-max-use SIZE      info/notice 空间容量，默认 2G
   --journal-warning-max-use SIZE   warning 空间容量，默认 1G
   --journal-error-max-use SIZE     error 及更严重等级空间容量，默认 1G
+  --colour                        接受显示开关，初始化输出保持纯文本
   -h, --help                      显示本子命令帮助
 
 执行时逐步输出命令及参数、目录创建或复用、新目录属主权限设置及当前配置写入。
