@@ -85,6 +85,7 @@ func TestHelpLayout(t *testing.T) {
 		"NDJSON", "stdout", "stderr", "(?i)",
 		"project", "instance_id", "components[].name",
 		"mct-syslogger init --help",
+		"sudo usermod -aG systemd-journal username",
 	} {
 		if !strings.Contains(help.String(), usage) {
 			t.Fatalf("帮助缺少使用说明：%s", usage)
