@@ -3,13 +3,13 @@
 package catalog
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 )
 
-// inheritOwner 以 init 准备的根目录为身份来源，让 root 和 app 创建相同属主的对象。
-// 仅修改已打开的新对象，避免通过路径 chown 跟随被替换的符号链接。
-func (s Store) inheritOwner(file *os.File) error {
+// checkGroup 以初始化根目录的 GID 校验已打开对象，不修改创建者 UID。
+func (s Store) checkGroup(file *os.File) error {
 	root, err := os.Lstat(s.Root)
 	if err != nil {
 		return err
@@ -20,10 +20,10 @@ func (s Store) inheritOwner(file *os.File) error {
 	}
 	owner := root.Sys().(*syscall.Stat_t)
 	actual := info.Sys().(*syscall.Stat_t)
-	if actual.Uid == owner.Uid && actual.Gid == owner.Gid {
-		return nil
+	if actual.Gid != owner.Gid {
+		return fmt.Errorf("名称目录对象 %s 的属组需要与根目录一致（GID=%d，当前GID=%d），请管理员人工处理: %w", file.Name(), owner.Gid, actual.Gid, os.ErrPermission)
 	}
-	return file.Chown(int(owner.Uid), int(owner.Gid))
+	return nil
 }
 
 // openProjectDirectory 拒绝目录入口的符号链接，后续元数据设置绑定到目录 fd。

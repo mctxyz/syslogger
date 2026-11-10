@@ -2,8 +2,6 @@ package hostinit
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -15,7 +13,6 @@ import (
 
 	"github.com/mctxyz/syslogger/internal/catalog"
 	"github.com/mctxyz/syslogger/internal/journalwire"
-	"golang.org/x/sys/unix"
 )
 
 func TestInitRequiresRoot(t *testing.T) {
@@ -28,27 +25,45 @@ func TestInitRequiresRoot(t *testing.T) {
 	}
 }
 
-func TestFixedAccountLookup(t *testing.T) {
-	account, lookupErr := user.Lookup(catalog.User)
-	uid, gid, err := testInitializer(io.Discard).prepareAccount()
+func TestGroupLookupAndCreationFailure(t *testing.T) {
+	group, lookupErr := user.LookupGroup(catalog.Group)
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "groupadd.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$INIT_TEST_GROUP_LOG\"\nexit 23\n"
+	if err := os.WriteFile(filepath.Join(directory, "groupadd"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	t.Setenv("INIT_TEST_GROUP_LOG", logPath)
+	gid, err := testInitializer(io.Discard).prepareGroup()
 	if lookupErr != nil {
 		if err == nil {
-			t.Fatal("固定账户不存在时未报错")
+			t.Fatal("共享组创建失败时未报错")
+		}
+		data, readErr := os.ReadFile(logPath)
+		if readErr != nil || strings.TrimSpace(string(data)) != "--system -- "+catalog.Group {
+			t.Fatalf("组创建命令不符: %q %v", data, readErr)
 		}
 		return
 	}
-	if err != nil || strconv.Itoa(uid) != account.Uid || strconv.Itoa(gid) != account.Gid {
-		t.Fatalf("固定账户身份解析错误: uid=%d gid=%d err=%v", uid, gid, err)
+	if err != nil || strconv.Itoa(gid) != group.Gid {
+		t.Fatalf("已有共享组解析错误: gid=%d err=%v", gid, err)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("已有组被重复创建: %v", err)
 	}
 }
 
-func TestCatalogReuseLeavesContentsUntouched(t *testing.T) {
+func TestCatalogRepairPreservesContentsAndInodes(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, catalog.DirectoryMode); err != nil {
 		t.Fatal(err)
 	}
 	project := filepath.Join(root, strings.Repeat("a", 64))
 	if err := os.Mkdir(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(project, 0700); err != nil {
 		t.Fatal(err)
 	}
 	lock := filepath.Join(project, ".catalog.lock")
@@ -58,28 +73,44 @@ func TestCatalogReuseLeavesContentsUntouched(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	before, err := os.Stat(lock)
-	if err != nil {
+	unknown := filepath.Join(project, "notes.txt")
+	if err := os.WriteFile(unknown, []byte("无关文件"), 0600); err != nil {
 		t.Fatal(err)
+	}
+	temporary := filepath.Join(root, ".catalog-project-unfinished")
+	if err := os.Mkdir(temporary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(temporary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	before := make(map[string]os.FileInfo)
+	for _, path := range []string{root, project, lock, dataPath, unknown, temporary} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = info
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for path, mode := range map[string]os.FileMode{root: catalog.DirectoryMode, project: 0700, lock: 0600, dataPath: 0600} {
+	for path, mode := range map[string]os.FileMode{root: catalog.DirectoryMode, project: catalog.DirectoryMode, lock: catalog.FileMode, dataPath: catalog.FileMode, unknown: 0600, temporary: 0700} {
 		info, err := os.Stat(path)
 		if err != nil || info.Mode()&(os.ModePerm|os.ModeSetgid) != mode {
-			t.Fatalf("重复初始化改写了既有内容权限: %s %v %v", path, info, err)
+			t.Fatalf("重复初始化权限修复结果不符: %s %v %v", path, info, err)
+		}
+		if !os.SameFile(before[path], info) {
+			t.Fatalf("重复初始化替换了已有对象: %s", path)
 		}
 	}
-	after, err := os.Stat(lock)
-	if err != nil || !os.SameFile(before, after) {
-		t.Fatalf("重复初始化替换了稳定锁 inode: %v", err)
-	}
-	data, err := os.ReadFile(dataPath)
-	if err != nil || string(data) != "保留" {
-		t.Fatalf("重复初始化改变了数据: %q %v", data, err)
+	for _, path := range []string{lock, dataPath} {
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != "保留" {
+			t.Fatalf("重复初始化改变了数据: %s %q %v", path, data, err)
+		}
 	}
 }
 
@@ -109,23 +140,7 @@ func TestCatalogRejectsUnsafeRoot(t *testing.T) {
 				if kind == "default-acl" {
 					name = "system.posix_acl_default"
 				}
-				acl := make([]byte, 4+5*8)
-				binary.LittleEndian.PutUint32(acl, 2)
-				for index, entry := range []struct {
-					tag  uint16
-					perm uint16
-					id   uint32
-				}{{1, 7, ^uint32(0)}, {2, 6, uint32(os.Getuid() + 1)}, {4, 5, ^uint32(0)}, {16, 7, ^uint32(0)}, {32, 5, ^uint32(0)}} {
-					offset := 4 + index*8
-					binary.LittleEndian.PutUint16(acl[offset:], entry.tag)
-					binary.LittleEndian.PutUint16(acl[offset+2:], entry.perm)
-					binary.LittleEndian.PutUint32(acl[offset+4:], entry.id)
-				}
-				if err := unix.Setxattr(root, name, acl, 0); errors.Is(err, unix.ENOTSUP) {
-					t.Skip("测试文件系统不支持 POSIX ACL")
-				} else if err != nil {
-					t.Fatal(err)
-				}
+				setCatalogTestACL(t, root, name)
 			}
 			if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err == nil {
 				t.Fatal("未拒绝不安全的名称根目录")
@@ -140,18 +155,18 @@ func TestCatalogRejectsUnsafeRoot(t *testing.T) {
 	}
 }
 
-func TestCatalogRejectsExistingPermissionDrift(t *testing.T) {
+func TestCatalogRepairsExistingPermissionDrift(t *testing.T) {
 	for _, mode := range []os.FileMode{0700, 0775, os.ModeSetgid | 0755, os.ModeSticky | 0755} {
 		root := t.TempDir()
 		if err := os.Chmod(root, mode); err != nil {
 			t.Fatal(err)
 		}
-		if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err == nil {
-			t.Fatal("不符合当前权限的已有根目录被自动修复")
+		if err := testInitializer(io.Discard).prepareCatalog(root, os.Geteuid(), os.Getegid()); err != nil {
+			t.Fatalf("未修复已有根目录权限: %v", err)
 		}
 		info, err := os.Stat(root)
-		if err != nil || info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != mode {
-			t.Fatalf("改变了已有根目录的权限: %v %v", info, err)
+		if err != nil || info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != catalog.DirectoryMode {
+			t.Fatalf("已有根目录权限未收敛到目标值: %v %v", info, err)
 		}
 	}
 }

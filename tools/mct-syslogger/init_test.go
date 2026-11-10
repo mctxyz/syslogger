@@ -27,12 +27,12 @@ func TestInitOptionsStaySeparate(t *testing.T) {
 			t.Fatalf("初始化的颜色修饰项影响了配置：%v %+v %v", args, opts, err)
 		}
 	}
-	for _, args := range [][]string{{"--user", "app"}, {"--list"}, {"--project", "demo"}, {"--journal-debug-max-use", "0"}, {"--journal-max-use", "5G"}, {"positional"}} {
+	for _, args := range [][]string{{"--user", "worker"}, {"--list"}, {"--project", "demo"}, {"--journal-debug-max-use", "0"}, {"--journal-max-use", "5G"}, {"positional"}} {
 		if _, err := parseInitOptions(args, io.Discard); err == nil {
 			t.Fatalf("初始化接受了无效参数: %v", args)
 		}
 	}
-	for _, args := range [][]string{{"--init"}, {"--user", "app"}, {"--journal-info-max-use", "10G"}} {
+	for _, args := range [][]string{{"--init"}, {"--user", "worker"}, {"--journal-info-max-use", "10G"}} {
 		if _, err := parseOptions(args, io.Discard); err == nil {
 			t.Fatalf("初始化参数污染了查询入口: %v", args)
 		}
@@ -40,6 +40,11 @@ func TestInitOptionsStaySeparate(t *testing.T) {
 	var help bytes.Buffer
 	if _, err := parseInitOptions([]string{"--help"}, &help); !errors.Is(err, flag.ErrHelp) || !strings.Contains(help.String(), "mct-syslogger init") {
 		t.Fatalf("独立帮助不可用: %s %v", help.String(), err)
+	}
+	for _, usage := range []string{"root:mct-syslogger", "sudo usermod -aG mct-syslogger username"} {
+		if !strings.Contains(help.String(), usage) {
+			t.Fatalf("帮助缺少共享组权限契约: %s", usage)
+		}
 	}
 }
 

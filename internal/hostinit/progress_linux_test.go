@@ -33,7 +33,7 @@ func TestDirectoryProgressMatchesActualCreation(t *testing.T) {
 	if !strings.Contains(output.String(), fmt.Sprintf("[创建目录] %q", path)) {
 		t.Fatalf("未报告实际创建的目录: %s", &output)
 	}
-	if !strings.Contains(output.String(), fmt.Sprintf("[设置目录权限] %q mode=0755", path)) {
+	if !strings.Contains(output.String(), fmt.Sprintf("[设置目录权限] %q mode=2775", path)) {
 		t.Fatalf("没有使用 Unix 权限表示: %s", &output)
 	}
 	info, err := os.Stat(path)
@@ -46,6 +46,9 @@ func TestDirectoryProgressMatchesActualCreation(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "[创建目录]") || !strings.Contains(output.String(), fmt.Sprintf("[复用目录] %q", path)) {
 		t.Fatalf("重复初始化误报创建: %s", &output)
+	}
+	if strings.Contains(output.String(), "[设置") {
+		t.Fatalf("正确权限被重复修改: %s", &output)
 	}
 	file := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(file, []byte("保留"), 0600); err != nil {

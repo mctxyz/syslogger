@@ -38,10 +38,10 @@ func TestUninitializedPermissionsAreNotRepairedBySDK(t *testing.T) {
 		t.Skip("POSIX 目录权限")
 	}
 	for name, mode := range map[string]os.FileMode{
-		"other-write": 0777,
-		"group-write": 0775,
-		"setgid":      DirectoryMode | os.ModeSetgid,
-		"sticky":      DirectoryMode | os.ModeSticky,
+		"other-write":         DirectoryMode | 0002,
+		"missing-setgid":      0775,
+		"missing-group-write": os.ModeSetgid | 0755,
+		"sticky":              DirectoryMode | os.ModeSticky,
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -193,6 +193,35 @@ func TestConcurrentPublicationAndRead(t *testing.T) {
 		if componentCount(instance.Components[0]) != want {
 			t.Fatalf("同身份并发合并丢失累计量: %+v", instance)
 		}
+	}
+}
+
+func TestUnpublishedProjectsAreIgnored(t *testing.T) {
+	store := Store{Root: preparedRoot(t)}
+	at := time.Now().UTC()
+	if err := store.Merge(activeFixture(Instance{Project: "project", InstanceID: "instance", Components: []Component{{Name: "rpc"}}}, at), at); err != nil {
+		t.Fatal(err)
+	}
+	temporary := filepath.Join(store.Root, projectTemporaryPrefix+"unfinished")
+	if err := os.Mkdir(temporary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(temporary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(temporary, "incomplete.json"), []byte("{unfinished"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	instances, err := store.Read()
+	if err != nil || len(instances) != 1 {
+		t.Fatalf("读取了准备中的项目: %+v %v", instances, err)
+	}
+	if err := store.Prune(at); err != nil {
+		t.Fatalf("清理访问了准备中的项目: %v", err)
+	}
+	entries, err := os.ReadDir(temporary)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "incomplete.json" {
+		t.Fatalf("清理改写了准备中的对象: %+v %v", entries, err)
 	}
 }
 

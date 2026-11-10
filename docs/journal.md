@@ -30,9 +30,17 @@ sudo mct-syslogger init \
 mct-syslogger init --help
 ```
 
-名称目录固定由已有本机 `app` 账户持有，命令需要 root、`systemctl`、`systemd-analyze`。初始化解析 `app` 的实际 UID 和主 GID；官方静态 Release 使用本机账户文件解析身份，因此应先准备可从 `/etc/passwd` 读取的 `app` 账户。命令保留系统账户配置，日志读取权限继续由管理员管理。
+命令需要 root、`systemctl`、`systemd-analyze` 和 `groupadd`。初始化查询本机 `mct-syslogger` 共享组，缺失时创建系统组，已有组直接复用并保留成员。官方静态 Release 从本机组文件解析 GID。业务账户和组成员关系由管理员管理，例如将已有程序账户加入共享组：
 
-命令创建由 `app` 及其主 GID 持有的 `/var/lib/mct-syslogger`，权限为 `0755`。已有根目录仅核验所有者、权限和 ACL，符合规范则复用，异常交管理员人工处理。项目目录、清单和锁由配套 SDK 按实际接收活动创建，目录为 `0755`、文件为 `0644`，root 程序同样沿用名称根目录的属主。systemd 配置仍由 root 管理，journal 文件继续由系统服务维护。
+```sh
+sudo usermod -aG mct-syslogger username
+```
+
+将 `username` 替换为实际程序账户，重启对应程序以刷新附加组；交互账户退出并重新登录后生效。此组用于名称目录写入，`systemd-journal` 日志读取权限单独管理，见[工具权限说明](../tools/README.md)。
+
+命令创建或复用 `/var/lib/mct-syslogger`，将根目录及已有受管项目目录修正为 `root:mct-syslogger`、`2775`，已有实例 JSON 和稳定锁修正为共享组、`0664`，保留文件 UID、内容和 inode。正确的元数据直接复用，初始化不创建项目清单或业务用户；链接、特殊类型、多重硬链接及 ACL 等异常明确报错，无关项保持原样。权限迁移前先停相关写入程序，失败时已完成修复保留，纠正异常后可重跑。
+
+SDK 按接收活动创建项目目录、清单和稳定锁，通过 setgid 继承根目录 GID，新对象初始保留创建者 UID，后续 init 会将已有项目目录统一为 root。组内程序可以继续维护 root 所有的项目和文件。SDK 自身只校验已有对象，不抢占属主或修复他人权限；旧权限布局通过新 init 迁移，见[名称目录权限](catalog.md#权限与故障处理)。systemd 配置由 root 管理，journal 文件由对应系统服务维护。
 
 ### 初始化过程输出
 
@@ -44,15 +52,16 @@ mct-syslogger init --help
 - **配置**：当前目标配置原子替换成功后区分创建与更新，管理员独立配置保留并参与生效检查。
 - **systemd 结果**：保留 `add-wants` 返回的链接创建信息，检查通过后报告专用 socket 就绪；由 systemd 管理的运行目录和 journal 文件不假报为 `init` 直接创建。
 
-以下为新建名称根目录、`app` 的 UID/GID 均为 2200、systemd 248+ 时的节选示例，具体数值、命令路径和对象取决于主机：
+以下为新建名称根目录、共享组 GID 为 2200、systemd 248+ 时的节选示例，具体 GID、命令路径和对象取决于主机：
 
 ```text
-[开始初始化] 目录所有者="app"
+[开始初始化] 目录所有者=root 写入组="mct-syslogger"
 [执行命令] "/usr/bin/systemd-analyze" 参数=["--version"]
 [等级空间] namespace="mct-syslogger-debug" 持久化容量="1G"
+[检查写入组] "mct-syslogger" GID=2200
 [创建目录] "/var/lib/mct-syslogger"
-[设置目录属主] "/var/lib/mct-syslogger" UID=2200 GID=2200
-[设置目录权限] "/var/lib/mct-syslogger" mode=0755
+[设置目录属主] "/var/lib/mct-syslogger" UID=0 GID=2200
+[设置目录权限] "/var/lib/mct-syslogger" mode=2775
 [更新配置] "/etc/systemd/journald@mct-syslogger-debug.conf.d/60-mct-syslogger-init.conf" mode=0644（临时文件原子替换）
 [执行命令] "/usr/bin/systemctl" 参数=["restart" "systemd-journald@mct-syslogger-debug.service"]
 ```

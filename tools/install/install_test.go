@@ -23,13 +23,11 @@ import (
 const fakeCLI = `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == init && "${!#}" == --help ]]; then
-    for argument in "$@"; do
-        if [[ "$argument" == --user=* && "$MOCK_FIXED_USER" == 1 ]]; then
-            exit "$MOCK_ACCOUNT_STATUS"
-        fi
-    done
     if [[ $# -gt 2 && "$MOCK_FOUR_GROUPS" == 0 ]]; then
         exit 2
+    fi
+    if [[ "$MOCK_GROUP_OWNER" == 1 ]]; then
+        printf '名称根目录 root:mct-syslogger，2775\n'
     fi
     exit "$MOCK_HELP_STATUS"
 fi
@@ -113,20 +111,18 @@ func newFixture(t *testing.T) *installerFixture {
 		log:    filepath.Join(directory, "log"),
 		bin:    filepath.Join(directory, "bin"),
 		settings: map[string]string{
-			"MOCK_OS":             "Linux",
-			"MOCK_ARCH":           "x86_64",
-			"MOCK_UID":            "1000",
-			"MOCK_RELEASE_URL":    "https://github.com/mctxyz/syslogger/releases/tag/test-release",
-			"MOCK_HELP_STATUS":    "0",
-			"MOCK_FOUR_GROUPS":    "1",
-			"MOCK_FIXED_USER":     "1",
-			"MOCK_ACCOUNT_STATUS": "2",
-			"MOCK_APP_EXISTS":     "1",
-			"MOCK_INIT_STATUS":    "0",
-			"MOCK_DOWNLOAD_FAIL":  "0",
-			"MOCK_SUDO_FAIL":      "0",
-			"MOCK_INSTALL_FAIL":   "",
-			"MOCK_SIGNAL":         "",
+			"MOCK_OS":            "Linux",
+			"MOCK_ARCH":          "x86_64",
+			"MOCK_UID":           "1000",
+			"MOCK_RELEASE_URL":   "https://github.com/mctxyz/syslogger/releases/tag/test-release",
+			"MOCK_HELP_STATUS":   "0",
+			"MOCK_FOUR_GROUPS":   "1",
+			"MOCK_GROUP_OWNER":   "1",
+			"MOCK_INIT_STATUS":   "0",
+			"MOCK_DOWNLOAD_FAIL": "0",
+			"MOCK_SUDO_FAIL":     "0",
+			"MOCK_INSTALL_FAIL":  "",
+			"MOCK_SIGNAL":        "",
 		},
 	}
 	for _, path := range []string{f.assets, f.work, f.log, f.bin} {
@@ -156,7 +152,7 @@ printf '%s\n' "$MOCK_UID"
 `,
 		"getent": `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MOCK_LOG/getent"
-[[ $# -eq 4 && "$1" == -s && "$2" == files && "$3" == passwd && "$4" == app && "$MOCK_APP_EXISTS" == 1 ]]
+exit 42
 `,
 		"sudo": `#!/usr/bin/env bash
 set -euo pipefail
@@ -351,14 +347,13 @@ func TestInstallerUpdatesWithoutInitialization(t *testing.T) {
 		uid       string
 		installed bool
 	}{
-		{name: "first-install-without-app", machine: "x86_64", arch: "amd64", uid: "1000"},
+		{name: "first-install", machine: "x86_64", arch: "amd64", uid: "1000"},
 		{name: "update-existing-install", machine: "aarch64", arch: "arm64", uid: "0", installed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f := newFixture(t)
 			f.settings["MOCK_ARCH"] = test.machine
 			f.settings["MOCK_UID"] = test.uid
-			f.settings["MOCK_APP_EXISTS"] = "0"
 			f.settings["MOCK_INIT_STATUS"] = "42"
 			target := filepath.Join(f.prefix, "bin/mct-syslogger")
 			document := filepath.Join(f.prefix, "share/doc/mct-syslogger/tools/README.md")
@@ -420,12 +415,15 @@ func TestInstallerInstallsAndInitializes(t *testing.T) {
 				t.Fatalf("初始化参数不符: got=%q want=%q", got, want)
 			}
 			f.assertInstalled(t, test.arch)
+			if got := readLog(t, filepath.Join(f.log, "getent")); got != "" {
+				t.Fatalf("安装初始化不应查询业务账户: %q", got)
+			}
 		})
 	}
 }
 
 func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
-	for _, name := range []string{"cancel", "cancel-init", "cancel-default-prefix", "no-tty", "eof", "unsupported-os", "unsupported-arch", "missing-app", "download", "bad-digest", "missing-digest", "duplicate-digest", "old-release", "single-space-release", "selectable-user-release", "unexpected-account-probe", "symlink", "release-url", "term", "interrupt"} {
+	for _, name := range []string{"cancel", "cancel-init", "cancel-default-prefix", "no-tty", "eof", "unsupported-os", "unsupported-arch", "download", "bad-digest", "missing-digest", "duplicate-digest", "old-release", "single-space-release", "legacy-ownership-release", "legacy-ownership-init-release", "symlink", "release-url", "term", "interrupt"} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			input, tty := f.input("y"), true
@@ -450,9 +448,6 @@ func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
 				f.settings["MOCK_OS"] = "Darwin"
 			case "unsupported-arch":
 				f.settings["MOCK_ARCH"] = "riscv64"
-			case "missing-app":
-				f.settings["MOCK_APP_EXISTS"] = "0"
-				args = []string{"--init"}
 			case "download":
 				f.settings["MOCK_DOWNLOAD_FAIL"] = "1"
 			case "bad-digest":
@@ -467,10 +462,11 @@ func TestInstallerStopsBeforeSystemChanges(t *testing.T) {
 				f.settings["MOCK_HELP_STATUS"] = "2"
 			case "single-space-release":
 				f.settings["MOCK_FOUR_GROUPS"] = "0"
-			case "selectable-user-release":
-				f.settings["MOCK_FIXED_USER"] = "0"
-			case "unexpected-account-probe":
-				f.settings["MOCK_ACCOUNT_STATUS"] = "127"
+			case "legacy-ownership-release", "legacy-ownership-init-release":
+				f.settings["MOCK_GROUP_OWNER"] = "0"
+				if name == "legacy-ownership-init-release" {
+					args = []string{"--init"}
+				}
 			case "symlink":
 				f.writeAssets(t, true)
 			case "release-url":

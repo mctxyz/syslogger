@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mctxyz/syslogger/internal/catalog"
 	"golang.org/x/sys/unix"
 )
 
@@ -55,31 +54,4 @@ func inspect(file *os.File, directory bool) (unix.Stat_t, error) {
 		}
 	}
 	return stat, nil
-}
-
-func (init *initializer) prepareCatalog(path string, uid, gid int) error {
-	root, created, err := init.openDirectory(path, catalog.DirectoryMode)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	stat, err := inspect(root, true)
-	if err != nil {
-		return err
-	}
-	if !created {
-		if stat.Uid != uint32(uid) || stat.Gid != uint32(gid) || stat.Mode&07777 != uint32(catalog.DirectoryMode.Perm()) {
-			return fmt.Errorf("名称根目录 %s 需要 UID=%d GID=%d 和 %04o 权限，当前 UID=%d GID=%d 权限=%04o，请管理员人工处理后重试", path, uid, gid, catalog.DirectoryMode.Perm(), stat.Uid, stat.Gid, stat.Mode&07777)
-		}
-		return nil
-	}
-	if err := root.Chown(uid, gid); err != nil {
-		return err
-	}
-	init.logger.Printf("[设置目录属主] %q UID=%d GID=%d", path, uid, gid)
-	if err := root.Chmod(catalog.DirectoryMode); err != nil {
-		return err
-	}
-	init.logger.Printf("[设置目录权限] %q mode=%04o", path, catalog.DirectoryMode.Perm())
-	return nil
 }

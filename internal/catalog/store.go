@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 )
@@ -31,7 +30,7 @@ func (s Store) write(instance Instance) error {
 	if _, err := file.Write(data); err != nil {
 		return err
 	}
-	if err := s.inheritOwner(file); err != nil {
+	if err := s.checkGroup(file); err != nil {
 		return err
 	}
 	if err := file.Chmod(FileMode); err != nil {
@@ -41,53 +40,6 @@ func (s Store) write(instance Instance) error {
 		return err
 	}
 	return os.Rename(temporary, path)
-}
-
-// CheckRoot 复用已经初始化的根目录，缺失时提示通过初始化命令创建。
-func (s Store) CheckRoot() error {
-	err := checkDirectory(s.Root)
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("名称根目录缺失，请运行 mct-syslogger init 创建: %w", err)
-	}
-	return err
-}
-
-func checkDirectory(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("名称目录 %s 不存在: %w", path, err)
-	}
-	if err != nil {
-		return fmt.Errorf("名称目录 %s 不可用，请管理员人工处理: %w", path, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("名称目录 %s 不是普通目录，请管理员人工处理", path)
-	}
-	// 已有对象的元数据由管理员处理，SDK 只维护符合当前规范的目录。
-	if runtime.GOOS != "windows" && info.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSticky) != DirectoryMode {
-		return fmt.Errorf("名称目录 %s 需要 %04o 权限及 %s 所有者，请管理员人工处理: %w", path, DirectoryMode, User, os.ErrPermission)
-	}
-	return nil
-}
-
-// projectDirectory 为新项目继承根目录的所有者，复用时核验当前目录规范。
-func (s Store) projectDirectory(path string) error {
-	err := os.Mkdir(path, DirectoryMode)
-	if err == nil {
-		directory, err := openProjectDirectory(path)
-		if err != nil {
-			return err
-		}
-		defer directory.Close()
-		if err := s.inheritOwner(directory); err != nil {
-			return err
-		}
-		return directory.Chmod(DirectoryMode)
-	}
-	if !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	return checkDirectory(path)
 }
 
 // Read 读取并排序项目和实例；首次发布之前的缺省目录对应空列表。
@@ -101,7 +53,7 @@ func (s Store) Read() ([]Instance, error) {
 		return nil, err
 	}
 	for _, project := range projects {
-		if !project.IsDir() {
+		if strings.HasPrefix(project.Name(), projectTemporaryPrefix) || !project.IsDir() {
 			continue
 		}
 		directory := filepath.Join(s.Root, project.Name())

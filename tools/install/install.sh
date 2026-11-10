@@ -39,7 +39,7 @@ main() {
                     '--init  额外询问四项容量并执行初始化：重新生成受管 journal 配置，覆盖其中的手动修改，重启四个专用 journald 实例。' \
                     '首次安装默认也只安装程序，需要配置日志接收入口时显式使用 --init，或以 root 运行 mct-syslogger init。' \
                     '支持 Linux amd64/arm64，需要交互终端、curl、GNU tar/coreutils、awk，以及 root 或 sudo。' \
-                    '安装前缀默认 /usr/local；--init 另需 getent、已有本机 app 账户、systemd 245+ 及 init 所需系统工具，四空间容量默认 1G/2G/1G/1G。'
+                    '安装前缀默认 /usr/local；--init 另需 systemd 245+、groupadd 及 init 所需系统工具，创建 root:mct-syslogger、2775 的名称根目录，四空间容量默认 1G/2G/1G/1G。'
                 return
                 ;;
             *)
@@ -64,11 +64,6 @@ main() {
             die "不支持的 CPU 架构：$(uname -m)"
             ;;
     esac
-    if [[ "$initialize" == true ]]; then
-        command -v getent >/dev/null || die '初始化缺少依赖：getent，请先安装。'
-        getent -s files passwd app >/dev/null || die '初始化需要已有的本机 app 账户，请管理员先准备该账户。'
-    fi
-
     local -a elevate=()
     if [[ $(id -u) != 0 ]]; then
         command -v sudo >/dev/null || die '安装需要 root，请先安装 sudo 或由 root 运行。'
@@ -136,14 +131,9 @@ main() {
     if ! "$candidate" "${probe_args[@]}" --help >"$work_dir/init-help.txt" 2>&1; then
         die '发布包不支持四个等级空间的 init 参数或无法运行，请等待配套 Release 并检查架构。'
     fi
-    # 固定账户版本会拒绝旧账户参数；精确检查参数错误，避免安装要求账户交互的旧 Release。
-    local probe_status
-    if "$candidate" init --user=app --help >"$work_dir/account-probe.txt" 2>&1; then
-        die '发布包仍使用可选运行账户，请等待固定 app 所有者的配套 Release。'
-    else
-        probe_status=$?
-    fi
-    [[ "$probe_status" -eq 2 ]] || die '无法确认发布包的固定账户接口，未安装或初始化。'
+    # 初始化帮助声明目录的权限契约，防止脚本先发布时安装旧属主模型的 Release。
+    [[ $(<"$work_dir/init-help.txt") == *'root:mct-syslogger'* ]] ||
+        die '发布包尚未使用 root:mct-syslogger 共享组权限，请等待配套 Release。'
 
     local prefix target doc_dir status
     while true; do
@@ -168,15 +158,15 @@ main() {
     printf '\n版本：%s（linux/%s）\n命令：%s\n文档：%s\n' \
         "$tag" "$arch" "$target" "$doc_dir"
     if [[ "$initialize" == true ]]; then
-        printf '名称目录所有者：app\n'
+        printf '名称根目录：root:mct-syslogger，2775；程序组成员由管理员管理。\n'
         for index in "${!groups[@]}"; do
             printf 'journal %s 容量：%s\n' "${groups[$index]}" "${capacities[$index]}"
         done
         printf '%s\n' \
-            '将更新上述命令和文档，并以 root 运行 init：创建或核验 app 名称根目录、重新生成受管配置、重启四个专用 journald 实例。' \
+            '将更新上述命令和文档，并以 root 运行 init：准备共享组，将根及已有项目目录修正为 root:mct-syslogger，原地修正受管文件权限，重新生成受管配置并重启四个专用 journald 实例。' \
             '受管配置中的手动修改会被覆盖；管理员独立配置保留并参与冲突检查。' \
-            '需要 Linux、systemd 245+ 及 init 所需系统工具；账户、权限和容量规则由 init 校验。' \
-            '历史目录和配置由部署方手动处理，清理前先停止相关写入进程；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
+            '需要 Linux、systemd 245+ 及 init 所需系统工具；属组、权限和容量规则由 init 校验，程序账户自行加入共享组。' \
+            '权限迁移前先停止相关写入进程；清单内容和稳定锁 inode 保留，受管链接/ACL 等异常需人工处理后重试；缩小容量可能清理旧归档。默认系统 journal 保持原样。'
         prompt '确认安装并初始化？[y/N]：' 'n'
     else
         printf '%s\n' '本次仅安装或更新上述命令和文档，保持日志配置、名称目录和 journald 服务状态原样。'
@@ -206,7 +196,7 @@ main() {
         init_args+=("--journal-${groups[$index]}-max-use=${capacities[$index]}")
     done
     if "${elevate[@]}" "$target" "${init_args[@]}"; then
-        printf '安装及初始化完成：%s\n名称目录由 app 持有，日志读取权限仍由管理员管理。\n' "$target"
+        printf '安装及初始化完成：%s\n名称根目录为 root:mct-syslogger；程序账户加入共享组后重启，systemd-journal 读取权限另行管理。\n' "$target"
     else
         status=$?
         printf '命令已安装到 %s，但初始化失败；已完成步骤保留，请修正原因后重跑 init。\n' "$target" >&2

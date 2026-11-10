@@ -23,9 +23,11 @@ bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogg
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/mctxyz/syslogger/main/tools/install/install.sh | bash -s -- --init'
 ```
 
-该模式另需 systemd 245+、已有本机 `app` 账户及初始化系统工具，并询问四个 journal 空间的持久化容量，依次默认 `1G/2G/1G/1G`。`--init` 会重新生成受管 journal 配置，覆盖其中的手动修改，并重启四个专用 journald 实例；管理员独立配置保留并参与冲突检查。
+该模式另需 systemd 245+、`groupadd` 及初始化系统工具，并询问四个 journal 空间的持久化容量，依次默认 `1G/2G/1G/1G`。`--init` 会重新生成受管 journal 配置，覆盖其中的手动修改，并重启四个专用 journald 实例；管理员独立配置保留并参与冲突检查。
 
-初始化创建或核验 `app` 持有的名称根目录，并重启四个专用 journald 实例。已有目录元数据不符合规范时须人工处理；历史内容由部署方手动清理，清理前先停止相关写入进程。缩小容量可能清理对应空间的旧归档，失败时已完成步骤保留。旧单空间的手动清理见[部署说明](docs/journal.md#升级与手动清理旧空间)。
+初始化准备 `mct-syslogger` 共享组，创建或修正 `root:mct-syslogger`、`2775` 的名称根目录及已有受管项目目录，并重启四个专用 journald 实例。各程序可以使用独立账户，由管理员将其加入共享组并重启程序刷新组身份；SDK 新项目目录为 `2775`，初始保留创建者 UID，后续 init 可统一为 root。清单及锁为 `0664`，保留原 UID 和内容，通过属组协作维护。
+
+权限迁移前先停止相关写入进程，再运行配套 init 自动修正受管对象，保留清单内容及稳定锁 inode。无关项保持原样；受管链接、特殊类型、硬链接或 ACL 等异常需管理员处理后重试，见[名称目录权限](docs/catalog.md#权限与故障处理)。缩小容量可能清理对应空间的旧归档，失败时已完成步骤保留。旧单空间的手动清理见[部署说明](docs/journal.md#升级与手动清理旧空间)。
 
 源码中可运行 `bash tools/install/install.sh` 安装或更新，使用 `bash tools/install/install.sh --init` 安装并初始化，帮助使用 `bash tools/install/install.sh --help`。程序安装后也可单独执行 `sudo mct-syslogger init`。依赖、手工下载和完整安装说明见 [工具文档](tools/README.md#release-下载与安装)。
 

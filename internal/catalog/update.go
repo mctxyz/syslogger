@@ -96,7 +96,7 @@ func (s Store) Prune(now time.Time) error {
 		return err
 	}
 	for _, project := range projects {
-		if !project.IsDir() {
+		if strings.HasPrefix(project.Name(), projectTemporaryPrefix) || !project.IsDir() {
 			continue
 		}
 		if err := s.pruneProject(filepath.Join(s.Root, project.Name()), now); err != nil {

@@ -14,14 +14,14 @@ import (
 // Root 是 SDK 和日志工具共同使用的固定目录，与进程 TMPDIR 无关。
 const Root = "/var/lib/mct-syslogger"
 
-// User 是名称目录及其中所有受管对象的固定所有者。
-const User = "app"
+// Group 是名称目录的共享写入组，成员由部署方管理。
+const Group = "mct-syslogger"
 
-// DirectoryMode 允许所有者维护目录，其余账户可读取和遍历。
-const DirectoryMode os.FileMode = 0755
+// DirectoryMode 通过 setgid 继承属组，允许组内协作维护目录，其余账户只读。
+const DirectoryMode os.FileMode = os.ModeSetgid | 0775
 
-// FileMode 允许所有者维护清单和稳定锁，其余账户只读。
-const FileMode = 0644
+// FileMode 允许所有者及共享组维护清单和稳定锁，其余账户只读。
+const FileMode = 0664
 
 // LockName 是项目级稳定锁文件名，发布和清理共用此路径约定。
 const LockName = ".catalog.lock"

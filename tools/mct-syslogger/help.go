@@ -200,6 +200,8 @@ func writeHelp(output io.Writer, flags *flag.FlagSet) {
   将 username 替换为实际用户名；退出并重新登录后组权限生效。
   此组通常授予系统 journal 及其他命名空间的读取权限，不只本工具的四个空间。
   SDK 通过默认 socket 写日志通常无需加入此组；请按实际读取需求授权。
+  开启名称目录的程序账户需加入 mct-syslogger 写入组，配置示例见 init --help。
+  名称目录写入组与 systemd-journal 读取组分别授权；加组后重启程序以刷新组身份。
   查询模式只读；主机初始化由管理员操作，参数与影响先查看：
     mct-syslogger init --help
   安装配置与完整规则见项目 tools/README.md、docs/journal.md。

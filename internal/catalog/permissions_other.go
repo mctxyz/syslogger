@@ -4,8 +4,8 @@ package catalog
 
 import "os"
 
-// inheritOwner 在非 Unix 平台沿用本地文件系统身份；固定 app 的主机初始化由 Linux 提供。
-func (s Store) inheritOwner(file *os.File) error {
+// checkGroup 在非 Unix 平台沿用本地权限；共享组的主机初始化由 Linux 提供。
+func (s Store) checkGroup(file *os.File) error {
 	return nil
 }
 

@@ -27,13 +27,13 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("初始化需要 root，请使用 sudo mct-syslogger init")
 	}
-	for _, name := range []string{"systemctl", "systemd-analyze"} {
+	for _, name := range []string{"systemctl", "systemd-analyze", "groupadd"} {
 		if _, err := exec.LookPath(name); err != nil {
 			return fmt.Errorf("初始化需要系统工具 %s: %w", name, err)
 		}
 	}
 	init := initializer{ctx: ctx, logger: log.New(output, "", 0)}
-	init.logger.Printf("[开始初始化] 目录所有者=%q", catalog.User)
+	init.logger.Printf("[开始初始化] 目录所有者=root 写入组=%q", catalog.Group)
 	version, err := init.installedSystemdVersion()
 	if err != nil {
 		return err
@@ -51,11 +51,11 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 			}
 		}
 	}
-	uid, gid, err := init.prepareAccount()
+	gid, err := init.prepareGroup()
 	if err != nil {
 		return err
 	}
-	if err := init.prepareCatalog(catalog.Root, uid, gid); err != nil {
+	if err := init.prepareCatalog(catalog.Root, os.Geteuid(), gid); err != nil {
 		return fmt.Errorf("准备名称目录: %w", err)
 	}
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
@@ -63,7 +63,7 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 			return fmt.Errorf("准备专用 journal %s: %w", group.Namespace(), err)
 		}
 	}
-	if _, err := fmt.Fprintf(output, "初始化完成：目录 %s，所有者 %s（UID=%d GID=%d）；四空间持久化与压缩开启。\n", catalog.Root, catalog.User, uid, gid); err != nil {
+	if _, err := fmt.Fprintf(output, "初始化完成：目录 %s，所有者 root:%s（UID=0 GID=%d）；四空间持久化与压缩开启。\n", catalog.Root, catalog.Group, gid); err != nil {
 		return err
 	}
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
@@ -71,7 +71,7 @@ func Run(ctx context.Context, opts Options, output io.Writer) error {
 			return err
 		}
 	}
-	_, err = fmt.Fprintln(output, "名称目录权限为 0755，清单和锁文件为 0644。")
+	_, err = fmt.Fprintln(output, "名称目录权限为 2775，清单和锁文件为 0664；程序账户加入 mct-syslogger 组后重启以刷新组身份。")
 	return err
 }
 

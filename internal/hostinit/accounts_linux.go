@@ -1,6 +1,7 @@
 package hostinit
 
 import (
+	"errors"
 	"fmt"
 	"os/user"
 	"strconv"
@@ -8,20 +9,23 @@ import (
 	"github.com/mctxyz/syslogger/internal/catalog"
 )
 
-// prepareAccount 解析已有 app 账户的数值身份，资源创建不改变系统账户配置。
-func (init *initializer) prepareAccount() (int, int, error) {
-	account, err := user.Lookup(catalog.User)
-	if err != nil {
-		return 0, 0, fmt.Errorf("需要已有的本机账户 %s: %w", catalog.User, err)
+// prepareGroup 准备共享写入组，组内业务账户及成员关系由部署方管理。
+func (init *initializer) prepareGroup() (int, error) {
+	group, err := user.LookupGroup(catalog.Group)
+	var missing user.UnknownGroupError
+	if errors.As(err, &missing) {
+		if _, err := init.command("groupadd", "--system", "--", catalog.Group); err != nil {
+			return 0, err
+		}
+		group, err = user.LookupGroup(catalog.Group)
 	}
-	uid, err := strconv.Atoi(account.Uid)
 	if err != nil {
-		return 0, 0, fmt.Errorf("解析 %s 的 UID: %w", catalog.User, err)
+		return 0, fmt.Errorf("查询共享写入组 %s: %w", catalog.Group, err)
 	}
-	gid, err := strconv.Atoi(account.Gid)
+	gid, err := strconv.Atoi(group.Gid)
 	if err != nil {
-		return 0, 0, fmt.Errorf("解析 %s 的主 GID: %w", catalog.User, err)
+		return 0, fmt.Errorf("解析 %s 的 GID: %w", catalog.Group, err)
 	}
-	init.logger.Printf("[检查运行账户] %q UID=%d GID=%d", catalog.User, uid, gid)
-	return uid, gid, nil
+	init.logger.Printf("[检查写入组] %q GID=%d", catalog.Group, gid)
+	return gid, nil
 }
