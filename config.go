@@ -33,7 +33,7 @@ type Config struct {
 	SyslogSocketPath string
 	// DefaultQueueCapacity 指定模块日志队列的默认容量，零值为 512，合法范围为 1～4096。
 	DefaultQueueCapacity int
-	// StateEnabled 开启同步状态维护，零值关闭。
+	// StateEnabled 开启同步具名状态维护及组件整体汇总，零值关闭。
 	StateEnabled bool
 	// DegradeOnQueueFull 按模块队满丢弃自动降级，零值关闭，启用时需要 StateEnabled。
 	DegradeOnQueueFull bool

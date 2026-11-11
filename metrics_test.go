@@ -31,7 +31,7 @@ func metricFixture(t *testing.T) *Manager {
 	rpc := testComponent(t, m, "rpc")
 	testComponent(t, m, "a")
 	rpc.mu.Lock()
-	rpc.current = record.New(int(StateUnhealthy), time.Unix(1792656000, 123))
+	rpc.health = map[string]record.Record{"service": record.New(int(StateUnhealthy), time.Unix(1792656000, 123))}
 	rpc.mu.Unlock()
 	rpc.logs.Reject()
 	rpc.logs.Reject()
@@ -59,10 +59,14 @@ func TestNativeCollectorContract(t *testing.T) {
 			for _, label := range metric.Label {
 				labels[label.GetName()] = label.GetValue()
 			}
-			if len(labels) != 3 || labels["project"] != m.cfg.Project || labels["instance_id"] != m.cfg.InstanceID {
+			wantLabels := 4
+			if metric.Counter != nil {
+				wantLabels = 3
+			}
+			if len(labels) != wantLabels || labels["project"] != m.cfg.Project || labels["instance_id"] != m.cfg.InstanceID {
 				t.Fatalf("内置身份标签不符: %v", labels)
 			}
-			key := family.GetName() + ":" + labels["component"]
+			key := family.GetName() + ":" + labels["component"] + ":" + labels["name"]
 			if seen[key] {
 				t.Fatalf("重复指标样本: %s", key)
 			}
@@ -76,7 +80,7 @@ func TestNativeCollectorContract(t *testing.T) {
 			}
 		}
 	}
-	if len(seen) != 10 {
+	if len(seen) != 12 {
 		t.Fatalf("内置指标样本数量不符: %d", len(seen))
 	}
 	data, err := m.metricsBytes()
@@ -94,12 +98,22 @@ func TestNativeCollectorContract(t *testing.T) {
 		"syslogger_component_log_rejected_total":      2,
 		"syslogger_component_log_send_failures_total": 1,
 	} {
+		if strings.HasSuffix(name, "_total") {
+			delete(labels, "name")
+		} else {
+			labels["name"] = overallHealthName
+		}
 		if !hasMetricSample(t, string(data), name, labels, value) {
 			t.Fatalf("内置样本不符: %s", name)
 		}
 	}
 	labels["component"] = "a"
-	for _, definition := range metricDefinitions {
+	for index, definition := range metricDefinitions {
+		if index < 2 {
+			labels["name"] = overallHealthName
+		} else {
+			delete(labels, "name")
+		}
 		if !hasMetricSample(t, string(data), definition.name, labels, 0) {
 			t.Fatalf("初始组件样本不符: %s", definition.name)
 		}
@@ -132,7 +146,7 @@ func TestSharedRegistryExportsBusinessMetrics(t *testing.T) {
 	if m.Registry() != registry {
 		t.Fatal("未使用调用方提供的注册表")
 	}
-	testComponent(t, m, "rpc").Unhealthy()
+	testComponent(t, m, "rpc").Unhealthy("service")
 	handler, err := m.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -207,8 +221,8 @@ func TestRegistryIsolationAndSharedInstances(t *testing.T) {
 	first := testManager(t, cfg)
 	cfg.InstanceID = "instance-b"
 	second := testManager(t, cfg)
-	testComponent(t, first, "rpc").Healthy()
-	testComponent(t, second, "rpc").Unhealthy()
+	testComponent(t, first, "rpc").Healthy("service")
+	testComponent(t, second, "rpc").Unhealthy("service")
 	data, err := first.metricsBytes()
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +231,7 @@ func TestRegistryIsolationAndSharedInstances(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": "instance-a",
 		"component":   "rpc",
+		"name":        overallHealthName,
 	}
 	if !hasMetricSample(t, string(data), "syslogger_component_state", labels, 1) {
 		t.Fatal("共享注册表丢失首个实例的状态")
@@ -240,7 +255,7 @@ func TestRegistryIsolationAndSharedInstances(t *testing.T) {
 func TestRegistryGatherFreezesComponents(t *testing.T) {
 	m := testManager(t, testConfig(t))
 	registry := m.Registry()
-	testComponent(t, m, "rpc").Healthy()
+	testComponent(t, m, "rpc").Healthy("service")
 	if _, err := registry.Gather(); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +296,7 @@ func TestRegistryCollisionAndSafeNew(t *testing.T) {
 	if safe.Registry() == cfg.Registry || safe.cfg.Registry != nil || first.Registry() != cfg.Registry {
 		t.Fatal("容错构造未独立恢复注册表或修改了原管理器")
 	}
-	testComponent(t, safe, "rpc").Healthy()
+	testComponent(t, safe, "rpc").Healthy("service")
 	if currentRecord(t, safe, diagnostic.ComponentName).State != int(StateUnhealthy) {
 		t.Fatal("注册表纠正未保留管理器初始化异常")
 	}
@@ -317,7 +332,7 @@ func TestGatherFailurePreservesFileAndReportsHTTP(t *testing.T) {
 	cfg.File.FlushInterval = 5 * time.Millisecond
 	m := testManager(t, cfg)
 	component := testComponent(t, m, "rpc")
-	component.Healthy()
+	component.Healthy("service")
 	var failing atomic.Bool
 	collectErr := errors.New("业务采集失败")
 	desc := prometheus.NewDesc("business_probe", "业务采集状态", nil, nil)
@@ -411,7 +426,7 @@ func TestLongIdentityValues(t *testing.T) {
 			manager = testManager(t, cfg)
 		}
 		name := strings.Repeat("组", 2048)
-		testComponent(t, manager, name).Healthy()
+		testComponent(t, manager, name).Healthy("service")
 		data, err := manager.metricsBytes()
 		if err != nil {
 			t.Fatal(err)
@@ -420,6 +435,7 @@ func TestLongIdentityValues(t *testing.T) {
 			"project":     cfg.Project,
 			"instance_id": cfg.InstanceID,
 			"component":   name,
+			"name":        overallHealthName,
 		}
 		if !hasMetricSample(t, string(data), "syslogger_component_state", labels, 1) {
 			t.Fatal("长身份值被拒绝、替换或截断")

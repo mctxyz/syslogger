@@ -20,15 +20,15 @@ func TestConcurrentStateSnapshotsAndClose(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			for i := 0; i < 500; i++ {
-				a.Healthy()
-				b.Unhealthy()
+				a.Healthy("service")
+				b.Unhealthy("service")
 				_ = m.snapshot()
 			}
 		}()
 	}
 	workers.Wait()
-	a.Degraded()
-	b.Healthy()
+	a.Degraded("service")
+	b.Healthy("service")
 	beforeA, beforeB := currentRecord(t, m, "a"), currentRecord(t, m, "b")
 	for n := 0; n < 8; n++ {
 		workers.Add(1)
@@ -40,8 +40,8 @@ func TestConcurrentStateSnapshotsAndClose(t *testing.T) {
 		}()
 	}
 	workers.Wait()
-	a.Healthy()
-	b.Unhealthy()
+	a.Healthy("service")
+	b.Unhealthy("service")
 	if currentRecord(t, m, "a") != beforeA || currentRecord(t, m, "b") != beforeB {
 		t.Fatal("关闭截止破坏了完整记录")
 	}
@@ -102,8 +102,8 @@ func TestConcurrentQueueHealthAndClose(t *testing.T) {
 			<-start
 			for i := 0; i < 100; i++ {
 				c.Info("并发提交", nil)
-				c.Unhealthy()
-				c.Healthy()
+				c.Unhealthy("service")
+				c.Healthy("service")
 				if _, err := m.Registry().Gather(); err != nil {
 					t.Errorf("并发采集失败: %v", err)
 					return
@@ -127,11 +127,9 @@ func TestConcurrentQueueHealthAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	frozen := currentRecord(t, m, "rpc")
-	c.Healthy()
-	c.mu.RLock()
-	later := c.healthAt(time.Now().Add(time.Hour))
-	c.mu.RUnlock()
-	if later != frozen || currentRecord(t, m, "rpc") != frozen {
+	c.Healthy("service")
+	time.Sleep(2 * cfg.QueueFullRecoveryInterval)
+	if currentRecord(t, m, "rpc") != frozen {
 		t.Fatal("并发关闭后健康记录仍发生变化")
 	}
 }

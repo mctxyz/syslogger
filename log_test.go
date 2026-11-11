@@ -60,7 +60,7 @@ func TestEightLevelsAndFieldSnapshot(t *testing.T) {
 			t.Fatalf("正文不符: %+v", event)
 		}
 	}
-	if c.current.Reported {
+	if len(c.health) != 0 {
 		t.Fatal("日志自动更新了业务状态")
 	}
 	c.Info("不能编码", Fields{"value": make(chan int)})
@@ -98,7 +98,7 @@ func TestSendFailureDropsAndConnectionRecovers(t *testing.T) {
 		t.Fatalf("历史发送失败污染关闭结果: %v", err)
 	}
 	rejected, failed := c.logs.Counts()
-	if rejected != 0 || failed != 1 || c.current.Reported {
+	if rejected != 0 || failed != 1 || len(c.health) != 0 {
 		t.Fatal("发送失败计数或状态隔离不符")
 	}
 }
@@ -172,7 +172,7 @@ func TestModuleBackpressureIsolationAndBoundedClose(t *testing.T) {
 		t.Fatal("队满拒收未通过标准日志诊断")
 	}
 	b.Info("独立模块仍可接收", nil)
-	a.Unhealthy()
+	a.Unhealthy("service")
 	if currentRecord(t, m, "saturated").State != 3 {
 		t.Fatal("日志积压阻止了同步状态提交")
 	}
@@ -217,7 +217,7 @@ func TestLogRejectionDiagnostics(t *testing.T) {
 			cfg.DegradeOnQueueFull = true
 			m := testManager(t, cfg)
 			c := testComponent(t, m, "rpc")
-			c.Healthy()
+			c.Healthy("service")
 			before := currentRecord(t, m, "rpc")
 			if test.closed {
 				if err := m.Close(context.Background()); err != nil {
@@ -270,9 +270,9 @@ func TestLogInvalidComponents(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			capture := captureLogs(t)
-			test.component.Healthy()
-			test.component.Degraded()
-			test.component.Unhealthy()
+			test.component.Healthy("service")
+			test.component.Degraded("service")
+			test.component.Unhealthy("service")
 			message := "空句柄\n详细信息"
 			test.component.Error(message, Fields{
 				"error": errors.New("业务错误"),

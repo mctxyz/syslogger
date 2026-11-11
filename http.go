@@ -12,7 +12,7 @@ import (
 func (m *Manager) Handler() (http.Handler, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closing {
+	if !m.closedAt.IsZero() {
 		return nil, ErrClosed
 	}
 	if !m.cfg.HTTP.Enabled {
@@ -24,7 +24,7 @@ func (m *Manager) Handler() (http.Handler, error) {
 
 func (m *Manager) serveMetrics(w http.ResponseWriter, request *http.Request) {
 	m.mu.RLock()
-	closing := m.closing
+	closing := !m.closedAt.IsZero()
 	m.mu.RUnlock()
 	if closing {
 		http.Error(w, "syslogger: 管理器已关闭", http.StatusServiceUnavailable)
@@ -44,7 +44,7 @@ func (m *Manager) serveMetrics(w http.ResponseWriter, request *http.Request) {
 // StartHTTP 同步绑定配置地址，成功后后台提供 /metrics；重复启动返回错误。
 func (m *Manager) StartHTTP() error {
 	m.mu.Lock()
-	if m.closing {
+	if !m.closedAt.IsZero() {
 		m.mu.Unlock()
 		return ErrClosed
 	}
@@ -74,7 +74,7 @@ func (m *Manager) StartHTTP() error {
 		m.mu.Unlock()
 		return err
 	}
-	if m.closing {
+	if !m.closedAt.IsZero() {
 		m.mu.Unlock()
 		_ = listener.Close()
 		m.mu.Lock()

@@ -46,9 +46,15 @@ func TestQueueHealthStateComposition(t *testing.T) {
 		},
 		{
 			name:     "recovery_at_deadline",
+			business: healthy,
 			lastDrop: droppedAt,
 			at:       deadline,
 			want:     record.New(int(StateHealthy), deadline),
+		},
+		{
+			name:     "no_business_after_recovery",
+			lastDrop: droppedAt,
+			at:       deadline,
 		},
 		{
 			name:     "repeated_drop_resets_window",
@@ -67,10 +73,13 @@ func TestQueueHealthStateComposition(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			c.mu.Lock()
-			c.current = test.business
+			c.health = make(map[string]record.Record)
+			if test.business.Reported {
+				c.health["service"] = test.business
+			}
 			c.lastQueueFull = test.lastDrop
 			got := c.healthAt(test.at)
-			business := c.current
+			business := c.health["service"]
 			c.mu.Unlock()
 			if got != test.want || business != test.business {
 				t.Fatalf("状态合成不符或覆盖了业务记录: got=%+v want=%+v business=%+v", got, test.want, business)
@@ -80,7 +89,7 @@ func TestQueueHealthStateComposition(t *testing.T) {
 	for _, state := range []State{StateDegraded, StateUnhealthy} {
 		business := record.New(int(state), droppedAt.Add(-time.Second))
 		c.mu.Lock()
-		c.current = business
+		c.health = map[string]record.Record{"service": business}
 		c.lastQueueFull = droppedAt
 		during := c.healthAt(droppedAt)
 		after := c.healthAt(deadline)
@@ -115,11 +124,17 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := testComponent(t, m, "independent")
-	a.Healthy()
-	b.Healthy()
+	a.Healthy("service")
+	a.Healthy("storage")
+	b.Healthy("service")
 	firstDrop := saturateLogQueue(t, a)
 	if firstDrop.IsZero() || currentRecord(t, m, "saturated").State != int(StateDegraded) {
 		t.Fatal("真实队满未产生自动降级")
+	}
+	for name, business := range a.health {
+		if business.State != int(StateHealthy) {
+			t.Fatalf("队满改写了独立业务记录: %s %+v", name, business)
+		}
 	}
 	lastDrop := saturateLogQueue(t, a)
 	a.mu.RLock()
@@ -144,6 +159,7 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": cfg.InstanceID,
 		"component":   "saturated",
+		"name":        overallHealthName,
 	}
 	for _, text := range []string{response.Body.String(), string(readSnapshot(t, cfg.File.OutputPath))} {
 		if !hasMetricSample(t, text, "syslogger_component_state", labels, 2) {
@@ -165,15 +181,16 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 	if !hasMetricSample(t, response.Body.String(), "syslogger_component_state", labels, 1) {
 		t.Fatal("HTTP 快照未按无丢弃窗口恢复")
 	}
-	a.Unhealthy()
+	a.Unhealthy("service")
 	business := currentRecord(t, m, "saturated")
 	saturateLogQueue(t, a)
 	if currentRecord(t, m, "saturated") != business {
-		t.Fatal("队满自动状态覆盖了业务主动 Unhealthy")
+		t.Fatal("队满自动状态覆盖了业务汇总故障")
 	}
-	a.Healthy()
+	a.Healthy("service")
 	lastDrop = saturateLogQueue(t, a)
 	frozen := currentRecord(t, m, "saturated")
+	storage := a.health["storage"]
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_ = m.Close(ctx)
@@ -185,8 +202,9 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 		t.Fatal("最终文件未保留截止时的自动降级")
 	}
 	time.Sleep(time.Until(lastDrop.Add(cfg.QueueFullRecoveryInterval)) + time.Millisecond)
-	a.Healthy()
-	if currentRecord(t, m, "saturated") != frozen {
+	a.Healthy("service")
+	a.Unhealthy("storage")
+	if currentRecord(t, m, "saturated") != frozen || a.health["storage"] != storage {
 		t.Fatal("关闭后自动恢复或业务上报改变了截止记录")
 	}
 	if !bytes.Equal(finalFile, readSnapshot(t, cfg.File.OutputPath)) {
@@ -208,7 +226,7 @@ func TestQueueHealthDisabled(t *testing.T) {
 		_ = m.Close(context.Background())
 	})
 	c := testComponent(t, m, "rpc")
-	c.Healthy()
+	c.Healthy("service")
 	before := currentRecord(t, m, "rpc")
 	if droppedAt := saturateLogQueue(t, c); !droppedAt.IsZero() {
 		t.Fatal("功能关闭时仍记录了自动恢复窗口")

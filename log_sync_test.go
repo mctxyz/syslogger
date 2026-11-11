@@ -65,7 +65,7 @@ func TestEightSynchronousLevels(t *testing.T) {
 			t.Fatalf("同步消息或字段快照错误: %+v", body)
 		}
 	}
-	if rejected, failed := c.logs.Counts(); rejected != 0 || failed != 0 || c.current.Reported {
+	if rejected, failed := c.logs.Counts(); rejected != 0 || failed != 0 || len(c.health) != 0 {
 		t.Fatal("同步发送改变了健康状态或错误计数")
 	}
 }

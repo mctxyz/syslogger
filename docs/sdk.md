@@ -8,7 +8,7 @@ syslogger 的 module 为 `github.com/mctxyz/syslogger`，包名为 `syslogger`�
 import "github.com/mctxyz/syslogger"
 ```
 
-日志和内置指标共用 `project、instance_id、component`。业务代码固定项目名和组件名，二者保留非空白且合法 UTF-8 的原文；业务入口从配置文件等来源读取实例 ID 后传给库，空实例 ID 使用 `common`，显式非空值按 3～128 字节和 UTF-8 校验并保留原文。
+日志和内置指标共用 `project、instance_id、component`，健康指标另以 `name` 区分组件内自定义状态及自动生成的 overall。业务代码固定项目名和组件名，二者保留非空白且合法 UTF-8 的原文；业务入口从配置文件等来源读取实例 ID 后传给库，空实例 ID 使用 `common`，显式非空值按 3～128 字节和 UTF-8 校验并保留原文。
 
 下方为初始化片段，业务在 `New` 成功后接管管理器的关闭职责，后续初始化失败也需要收尾；正常运行时，管理器的生命周期应覆盖业务使用期：
 
@@ -35,7 +35,9 @@ if err != nil {
 if err := manager.StartHTTP(); err != nil {
     return err
 }
-rpc.Unhealthy()
+if err := rpc.Unhealthy("connection"); err != nil {
+    return err
+}
 ```
 
 已有服务器通过 `Handler()` 挂载，服务器归业务管理。模块在取得 Handler、开始启动指标出口或首次通过 Registry 采集之前完成注册；配置及组件集合之后固定。模块注册后日志即可使用，业务退出时调用 `Close(ctx)`。

@@ -105,7 +105,7 @@ func currentRecord(t *testing.T, m *Manager, name string) record.Record {
 	t.Helper()
 	for _, item := range m.snapshot() {
 		if item.Name == name {
-			return item.Record
+			return item.Health[overallHealthName]
 		}
 	}
 	t.Fatalf("缺失组件 %q", name)

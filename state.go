@@ -2,6 +2,7 @@
 package syslogger
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/record"
@@ -21,42 +22,76 @@ const (
 	StateUnhealthy
 )
 
-// Healthy 同步汇报业务正常，启用队满自动降级时有效状态同时取决于恢复窗口。
-// 状态维护关闭或管理器关闭后安全忽略。
-func (c *Component) Healthy() {
-	c.setState(StateHealthy)
+// overallHealthName 标识 SDK 派生的组件整体，业务名称不能占用它。
+const overallHealthName = "overall"
+
+// Healthy 同步汇报指定名称的业务正常；同名报告更新同一条状态及时间。
+// 非法名称返回错误，合法报告在状态维护关闭或管理器关闭后安全忽略。
+func (c *Component) Healthy(name string) error {
+	return c.setState(name, StateHealthy)
 }
 
-// Degraded 同步汇报业务部分能力受损，业务主动故障持续由业务恢复。
-func (c *Component) Degraded() {
-	c.setState(StateDegraded)
+// Degraded 同步汇报指定名称的部分能力受损，仅由该名称后续报告恢复。
+func (c *Component) Degraded(name string) error {
+	return c.setState(name, StateDegraded)
 }
 
-// Unhealthy 同步汇报业务无法正常履行职责，业务主动故障持续由业务恢复。
-func (c *Component) Unhealthy() {
-	c.setState(StateUnhealthy)
+// Unhealthy 同步汇报指定名称无法正常履行职责，不覆盖其他名称的记录。
+func (c *Component) Unhealthy(name string) error {
+	return c.setState(name, StateUnhealthy)
 }
 
-func (c *Component) setState(state State) {
+func (c *Component) setState(name string, state State) error {
+	if err := validateName(name); err != nil {
+		return fmt.Errorf("syslogger: 健康名称: %w", err)
+	}
+	if name == overallHealthName {
+		return fmt.Errorf("syslogger: 健康名称 %q 用于组件整体汇总", name)
+	}
 	if c == nil || c.manager == nil || !c.manager.cfg.StateEnabled {
-		return
+		return nil
 	}
 	at := time.Now()
 	m := c.manager
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.closing {
-		return
+	if !m.closedAt.IsZero() {
+		return nil
 	}
 	c.mu.Lock()
-	c.current.Apply(record.New(int(state), at))
+	if c.health == nil {
+		c.health = make(map[string]record.Record)
+	}
+	current := c.health[name]
+	current.Apply(record.New(int(state), at))
+	c.health[name] = current
 	c.mu.Unlock()
+	return nil
 }
 
-// healthAt 在持有组件读锁或写锁时合成有效状态，业务主动故障优先。
-// 窗口恢复由采集时间自然推导，复用现有快照流程；关闭流程冻结同一规则的结果。
+// healthAt 在组件锁内汇总业务记录，再合成组件队满状态；at 由管理器统一冻结。
 func (c *Component) healthAt(at time.Time) record.Record {
-	current := c.current
+	var current record.Record
+	healthy, unhealthy := 0, 0
+	for _, business := range c.health {
+		current.Apply(business)
+		switch State(business.State) {
+		case StateHealthy:
+			healthy++
+		case StateUnhealthy:
+			unhealthy++
+		}
+	}
+	if len(c.health) > 0 {
+		switch {
+		case healthy == len(c.health):
+			current.State = int(StateHealthy)
+		case unhealthy == len(c.health):
+			current.State = int(StateUnhealthy)
+		default:
+			current.State = int(StateDegraded)
+		}
+	}
 	if !c.manager.cfg.DegradeOnQueueFull || c.lastQueueFull.IsZero() {
 		return current
 	}
@@ -67,6 +102,9 @@ func (c *Component) healthAt(at time.Time) record.Record {
 	if at.Before(recoveredAt) {
 		return record.New(int(StateDegraded), c.lastQueueFull)
 	}
-	current.Apply(record.New(int(StateHealthy), recoveredAt))
+	// 没有业务报告时，日志能力恢复不能代替业务得出 Healthy 结论。
+	if current.Reported {
+		current.Apply(record.New(int(StateHealthy), recoveredAt))
+	}
 	return current
 }

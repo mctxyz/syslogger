@@ -10,7 +10,7 @@ import (
 // StartFile 同步写入首次完整快照，成功后启动固定周期的文件交付。
 func (m *Manager) StartFile() error {
 	m.mu.Lock()
-	if m.closing {
+	if !m.closedAt.IsZero() {
 		m.mu.Unlock()
 		return ErrClosed
 	}
@@ -34,7 +34,7 @@ func (m *Manager) StartFile() error {
 		m.filePhase = outletIdle
 		return err
 	}
-	if m.closing {
+	if !m.closedAt.IsZero() {
 		m.filePhase = outletIdle
 		return ErrClosed
 	}

@@ -9,8 +9,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
+	"github.com/mctxyz/syslogger/internal/record"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/expfmt"
@@ -75,8 +77,8 @@ func TestComponentHealthMetricsOptIn(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				plain.Unhealthy()
-				monitored.Healthy()
+				plain.Unhealthy("service")
+				monitored.Healthy("service")
 				data, err := m.metricsBytes()
 				if err != nil {
 					t.Fatal(err)
@@ -86,6 +88,9 @@ func TestComponentHealthMetricsOptIn(t *testing.T) {
 						"syslogger_component_log_rejected_total":      0,
 						"syslogger_component_log_send_failures_total": 0,
 					}
+					labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": c.name}
+					assertComponentMetricSet(t, string(data), labels, want)
+					want = make(map[string]float64)
 					if c == monitored {
 						want["syslogger_component_state"] = 0
 						want["syslogger_component_timestamp_seconds"] = 0
@@ -94,14 +99,19 @@ func TestComponentHealthMetricsOptIn(t *testing.T) {
 							want["syslogger_component_timestamp_seconds"] = float64(currentRecord(t, m, c.name).ObservedAt.Unix())
 						}
 					}
-					labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": c.name}
+					labels["name"] = overallHealthName
+					assertComponentMetricSet(t, string(data), labels, want)
+					labels["name"] = "service"
+					if !stateEnabled {
+						want = make(map[string]float64)
+					}
 					assertComponentMetricSet(t, string(data), labels, want)
 				}
 				if currentRecord(t, m, plain.name).Reported != stateEnabled {
 					t.Fatal("健康导出开关改变了内部状态维护")
 				}
 				if stateEnabled {
-					labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": diagnostic.ComponentName}
+					labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": diagnostic.ComponentName, "name": overallHealthName}
 					record := currentRecord(t, m, diagnostic.ComponentName)
 					assertComponentMetricSet(t, string(data), labels, map[string]float64{
 						"syslogger_component_state":             float64(record.State),
@@ -125,8 +135,8 @@ func TestHealthMetricsSelectionAcrossOutlets(t *testing.T) {
 		t.Fatal(err)
 	}
 	monitored := testComponent(t, m, "monitored")
-	plain.Unhealthy()
-	monitored.Healthy()
+	plain.Unhealthy("service")
+	monitored.Healthy("service")
 	plain.Info("异步连接失败", nil)
 	waitUntil(t, func() bool {
 		_, failures := plain.logs.Counts()
@@ -168,11 +178,16 @@ func TestHealthMetricsSelectionAcrossOutlets(t *testing.T) {
 		})
 		labels["component"] = monitored.name
 		assertComponentMetricSet(t, text, labels, map[string]float64{
-			"syslogger_component_state":                   float64(StateHealthy),
-			"syslogger_component_timestamp_seconds":       float64(currentRecord(t, m, monitored.name).ObservedAt.Unix()),
 			"syslogger_component_log_rejected_total":      0,
 			"syslogger_component_log_send_failures_total": 0,
 		})
+		for _, name := range []string{overallHealthName, "service"} {
+			labels["name"] = name
+			assertComponentMetricSet(t, text, labels, map[string]float64{
+				"syslogger_component_state":             float64(StateHealthy),
+				"syslogger_component_timestamp_seconds": float64(currentRecord(t, m, monitored.name).ObservedAt.Unix()),
+			})
+		}
 		if strings.Count(text, "# HELP syslogger_component_state ") != 1 {
 			t.Fatal("状态说明未作为指标族 HELP 输出一次")
 		}
@@ -213,6 +228,7 @@ func TestAllComponentHealthMetricsDisabled(t *testing.T) {
 		})
 		if stateEnabled {
 			labels["component"] = diagnostic.ComponentName
+			labels["name"] = overallHealthName
 			record := currentRecord(t, m, diagnostic.ComponentName)
 			assertComponentMetricSet(t, string(data), labels, map[string]float64{
 				"syslogger_component_state":             float64(record.State),
@@ -252,5 +268,82 @@ func TestLogAndCatalogWithHealthMetricsDisabled(t *testing.T) {
 	}
 	if err := c.InfoSync(context.Background(), "关闭后", nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("关闭后的日志接收语义被改变: %v", err)
+	}
+}
+
+func TestDynamicNamedHealthAcrossOutlets(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Registry = prometheus.NewPedanticRegistry()
+	cfg.HTTP.Enabled = true
+	cfg.File.Enabled = true
+	m := testManager(t, cfg)
+	a := testComponent(t, m, "a")
+	b := testComponent(t, m, "b")
+	if err := a.Healthy("shared"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Unhealthy("shared"); err != nil {
+		t.Fatal(err)
+	}
+	// 固定既有记录的时间，验证最新整体时间不会覆盖旧明细的时间。
+	at := time.Unix(1794378816, 0)
+	a.health["shared"] = record.New(int(StateHealthy), at)
+	if _, err := m.Registry().Gather(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Unhealthy("late\"\\\n名称"); err != nil {
+		t.Fatal(err)
+	}
+	latest := a.health["late\"\\\n名称"]
+	a.logs.Reject()
+	a.logs.Reject()
+	if err := m.StartFile(); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := m.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := []string{string(readSnapshot(t, cfg.File.OutputPath))}
+	for _, outlet := range []http.Handler{handler, promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{})} {
+		response := httptest.NewRecorder()
+		outlet.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("具名健康采集失败: %d %s", response.Code, response.Body.String())
+		}
+		texts = append(texts, response.Body.String())
+	}
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	texts = append(texts, string(readSnapshot(t, cfg.File.OutputPath)))
+	for _, text := range texts {
+		if text != texts[0] {
+			t.Fatal("HTTP、共享 Registry、文件或最终快照的具名状态不一致")
+		}
+		labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": a.name}
+		assertComponentMetricSet(t, text, labels, map[string]float64{
+			"syslogger_component_log_rejected_total":      2,
+			"syslogger_component_log_send_failures_total": 0,
+		})
+		for name, health := range map[string]record.Record{
+			"shared":          record.New(int(StateHealthy), at),
+			"late\"\\\n名称":    latest,
+			overallHealthName: record.New(int(StateDegraded), latest.ObservedAt),
+		} {
+			labels["name"] = name
+			assertComponentMetricSet(t, text, labels, map[string]float64{
+				"syslogger_component_state":             float64(health.State),
+				"syslogger_component_timestamp_seconds": float64(health.ObservedAt.Unix()),
+			})
+		}
+		labels["component"] = b.name
+		for _, name := range []string{"shared", overallHealthName} {
+			labels["name"] = name
+			assertComponentMetricSet(t, text, labels, map[string]float64{
+				"syslogger_component_state":             float64(StateUnhealthy),
+				"syslogger_component_timestamp_seconds": float64(b.health["shared"].ObservedAt.Unix()),
+			})
+		}
 	}
 }

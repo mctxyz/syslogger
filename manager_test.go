@@ -25,7 +25,7 @@ func TestRegistrationCapacityAndPreservation(t *testing.T) {
 		}
 	}
 	c := testComponent(t, m, "rpc")
-	c.Unhealthy()
+	c.Unhealthy("service")
 	fact := currentRecord(t, m, "rpc")
 	if currentRecord(t, m, diagnostic.ComponentName) != initial {
 		t.Fatal("普通成功注册改变了初始化事实")
@@ -110,14 +110,14 @@ func TestStateSwitchAndClose(t *testing.T) {
 	if got := currentRecord(t, m, "rpc"); got.Reported || got.State != 0 {
 		t.Fatal("初始状态不符")
 	}
-	c.Healthy()
-	c.Degraded()
-	c.Unhealthy()
+	c.Healthy("service")
+	c.Degraded("service")
+	c.Unhealthy("service")
 	got := currentRecord(t, m, "rpc")
 	if !got.Reported || got.State != 3 || got.ObservedAt.IsZero() {
 		t.Fatalf("同步状态不符: %+v", got)
 	}
-	c.Unhealthy()
+	c.Unhealthy("service")
 	if currentRecord(t, m, "rpc").ObservedAt.Before(got.ObservedAt) {
 		t.Fatal("相同状态未刷新时间")
 	}
@@ -125,23 +125,23 @@ func TestStateSwitchAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = currentRecord(t, m, "rpc")
-	c.Healthy()
+	c.Healthy("service")
 	if currentRecord(t, m, "rpc") != got {
 		t.Fatal("关闭后状态改变")
 	}
 	cfg.StateEnabled = false
 	off := testManager(t, cfg)
 	disabled := testComponent(t, off, "rpc")
-	disabled.Healthy()
-	disabled.Degraded()
-	disabled.Unhealthy()
-	if disabled.current.Reported || off.diagnostic != nil {
+	disabled.Healthy("service")
+	disabled.Degraded("service")
+	disabled.Unhealthy("service")
+	if len(disabled.health) != 0 || off.diagnostic != nil {
 		t.Fatal("状态关闭仍执行更新")
 	}
 	var nilComponent *Component
-	nilComponent.Healthy()
-	nilComponent.Degraded()
-	nilComponent.Unhealthy()
+	nilComponent.Healthy("service")
+	nilComponent.Degraded("service")
+	nilComponent.Unhealthy("service")
 }
 
 func TestRegistrationPanicIsolation(t *testing.T) {

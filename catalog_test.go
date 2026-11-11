@@ -175,7 +175,7 @@ func TestCatalogFailurePreservesBusinessRegistration(t *testing.T) {
 	if err != nil || c == nil || c.logs == nil {
 		t.Fatalf("辅助目录失败阻断了业务注册: %v", err)
 	}
-	c.Healthy()
+	c.Healthy("service")
 	c.Info("需要持久化的入队日志", nil)
 	waitUntil(t, func() bool {
 		return strings.Contains(capture.String(), "发布日志名称目录失败")
@@ -209,7 +209,7 @@ func TestMissingCatalogPreservesLogsAndMetrics(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "not-initialized")
 	m := catalogManager(t, cfg, root)
 	c := testComponent(t, m, "rpc")
-	c.Healthy()
+	c.Healthy("service")
 	c.Info("目录失败仍然发送日志", nil)
 	if data := receive(t, receiver); !strings.Contains(string(data), "目录失败仍然发送日志") {
 		t.Fatalf("日志没有正常交付: %s", data)
@@ -245,7 +245,7 @@ func TestCatalogPermissionFailureAndRecovery(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(root, 0700) })
 	m := catalogManager(t, cfg, root)
 	c := testComponent(t, m, "rpc")
-	c.Healthy()
+	c.Healthy("service")
 	c.Info("无目录写权限仍发送", nil)
 	_ = receive(t, receiver)
 	m.publishCatalog()

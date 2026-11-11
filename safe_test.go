@@ -132,9 +132,9 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 	if currentRecord(t, m, diagnostic.ComponentName) != initial {
 		t.Fatal("注册失败或恢复覆盖了持续的配置异常")
 	}
-	rpc.Healthy()
-	rpc.Degraded()
-	rpc.Unhealthy()
+	rpc.Healthy("service")
+	rpc.Degraded("service")
+	rpc.Unhealthy("service")
 	if currentRecord(t, m, "rpc").State != int(StateUnhealthy) {
 		t.Fatal("SafeNew 的组件状态方法不可用")
 	}
@@ -153,6 +153,7 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 		"project":     "common",
 		"instance_id": "common",
 		"component":   diagnostic.ComponentName,
+		"name":        overallHealthName,
 	}
 	if response.Code != http.StatusOK || !hasMetricSample(t, response.Body.String(), "syslogger_component_state", labels, 3) {
 		t.Fatalf("HTTP 指标未展示管理器异常：%s", response.Body.String())
@@ -217,7 +218,7 @@ func TestSafeNewWorkingOutlets(t *testing.T) {
 		t.Fatalf("构造时写入了指标文件：%v", err)
 	}
 	rpc := testComponent(t, m, "rpc")
-	rpc.Healthy()
+	rpc.Healthy("service")
 	rpc.Info("outlets", nil)
 	seenBusiness := false
 	for i := 0; i < 4; i++ {
@@ -271,6 +272,7 @@ func TestSafeNewWorkingOutlets(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": cfg.InstanceID,
 		"component":   diagnostic.ComponentName,
+		"name":        overallHealthName,
 	}
 	if !hasMetricSample(t, string(file), "syslogger_component_state", labels, 3) {
 		t.Fatal("指标出口未保留初始化异常状态")
@@ -300,14 +302,14 @@ func TestSafeNewUnavailableSyslog(t *testing.T) {
 				t.Fatal("syslog 不可用时丢失了初始化诊断")
 			}
 			rpc := testComponent(t, m, "rpc")
-			rpc.Healthy()
-			rpc.Degraded()
-			rpc.Unhealthy()
+			rpc.Healthy("service")
+			rpc.Degraded("service")
+			rpc.Unhealthy("service")
 			if stateEnabled {
 				if currentRecord(t, m, diagnostic.ComponentName).State != int(StateUnhealthy) {
 					t.Fatal("syslog 不可用时丢失了健康异常")
 				}
-			} else if m.diagnostic != nil || rpc.current.Reported {
+			} else if m.diagnostic != nil || len(rpc.health) != 0 {
 				t.Fatal("syslog 不可用时强制开启了状态维护")
 			}
 			rpc.Info("syslog unavailable", nil)
@@ -337,14 +339,14 @@ func TestSafeNewDisabledOutletsAndCancellation(t *testing.T) {
 		t.Fatal("停用无效指标文件后仍强制开启状态或保留文件出口")
 	}
 	rpc := testComponent(t, m, "rpc")
-	rpc.Healthy()
+	rpc.Healthy("service")
 	if _, err := m.Handler(); err == nil {
 		t.Fatal("关闭的 HTTP 指标仍返回 Handler")
 	}
 	if m.StartHTTP() == nil || m.StartFile() == nil {
 		t.Fatal("关闭的指标出口被意外启动")
 	}
-	if err := m.Close(nil); err == nil || m.closing {
+	if err := m.Close(nil); err == nil || !m.closedAt.IsZero() {
 		t.Fatal("非法关闭参数破坏了管理器")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

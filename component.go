@@ -20,8 +20,8 @@ type Component struct {
 	logs                *logging.Queue
 	logReporter         diagnostic.Reporter
 	mu                  sync.RWMutex
-	// current 保存业务主动记录，关闭后保存截止时冻结的有效健康记录。
-	current record.Record
+	// health 保存业务按名称上报的权威记录，组件整体由这些记录派生。
+	health map[string]record.Record
 	// lastQueueFull 由真实的队满拒收更新，以组件锁保护恢复窗口的唯一时间依据。
 	lastQueueFull time.Time
 }
@@ -48,7 +48,7 @@ func (c *Component) log(level logging.Level, message string, fields Fields) {
 		c.logs.Reject()
 	} else {
 		m.mu.RLock()
-		if m.closing {
+		if !m.closedAt.IsZero() {
 			c.logs.Reject()
 			err = ErrClosed
 		} else {

@@ -1,10 +1,12 @@
 # 健康与指标
 
-组件健康状态由业务主动报告，日志发送和健康报告分别调用。HTTP、指标文件和外部 Registry 复用 Prometheus 官方 Collector。
+业务按自定义名称主动报告各部分的健康状态，SDK 自动汇总所属组件的整体健康。日志发送和健康报告分别调用，HTTP、指标文件和外部 Registry 复用 Prometheus 官方 Collector。
 
 ## 状态维护与逐组件导出
 
-`Healthy()`、`Degraded()`、`Unhealthy()` 无参数、无返回值，同步提交业务状态及库采集的时间。状态维护默认关闭，关闭时这些方法直接返回；日志与业务状态分别调用。四态为 0=Unknown、1=Healthy、2=Degraded、3=Unhealthy，Unknown 表示组件尚未形成业务或自动健康报告。较新业务入口时间整体替换业务记录，相同时间由后提交者覆盖，同状态也更新时间。
+`Healthy(name string) error`、`Degraded(name string) error`、`Unhealthy(name string) error` 同步提交该名称的业务状态及库采集的时间。名称在所属组件内唯一，不同组件可以使用相同名称；同名报告更新原记录，不同名称独立维护。名称保留合法 UTF-8 原文、区分大小写，必须包含非空白内容；`overall` 是 SDK 的整体输出保留名。非法名称返回错误且不修改任何记录；合法名称在状态维护关闭、无效组件句柄或管理器关闭截止后安全忽略。
+
+状态维护默认关闭，通过 `Config.StateEnabled` 开启。业务首次报告时建立对应名称，之后即使已开始采集也可报告新的名称，无需预先声明。SDK 只汇总已报告的名称，尚未出现的名称不参与计算。每份记录由较新的业务入口时间整体替换，相同时间由后提交者覆盖，同状态也更新时间；已出现的记录持续参与汇总，由业务后续报告更新。名称应选用数量可控的稳定业务名称。
 
 `ComponentConfig.EnableHealthMetrics` 控制该组件是否导出 `syslogger_component_state` 和 `syslogger_component_timestamp_seconds`，默认 `false` 不输出这两项样本，需要时在注册阶段显式开启：
 
@@ -20,13 +22,37 @@ runtime, err := manager.Register(syslogger.ComponentConfig{Name: "runtime"})
 if err != nil {
     return err
 }
-rpc.Healthy()
+if err := rpc.Healthy("connection"); err != nil {
+    return err
+}
+if err := rpc.Unhealthy("storage"); err != nil {
+    return err
+}
 runtime.Info("进程已启动", nil)
 ```
 
-该选项只控制导出，注册后固定：全局 `Config.StateEnabled` 仍控制健康记录维护，`DegradeOnQueueFull` 仍按原规则更新有效状态；显式开启导出但状态维护关闭时，健康样本保持初始 Unknown/0。两个日志 Counter 始终按原日志路径维护并参与采集，日志发送、同步日志及名称目录小时接收量不受此选项影响。管理器内置 `syslogger_manager` 的健康指标继续遵守原有全局状态配置。
+该选项只控制导出，注册后固定：全局 `Config.StateEnabled` 控制具名健康记录维护及整体汇总；显式开启导出但状态维护关闭时，只输出整体 Unknown/0。两个日志 Counter 始终按原日志路径维护并参与采集，日志发送、同步日志及名称目录小时接收量不受此选项影响。管理器内置 `syslogger_manager` 的健康指标继续遵守全局状态配置。
 
-HTTP、文件和外部共享 Registry 使用同一个 Collector，按组件采用相同的导出选择。升级前已依赖组件健康指标的调用方，需要为对应注册补充 `EnableHealthMetrics: true`；未启用的组件没有这两项样本，而不是输出零值。
+HTTP、文件和外部共享 Registry 使用同一个 Collector，按组件采用相同的导出选择；未启用的组件没有健康样本，而不是输出零值。
+
+## 组件整体健康
+
+四态为 0=Unknown、1=Healthy、2=Degraded、3=Unhealthy。SDK 从同次组件快照派生 `name="overall"`，业务只报告自己的名称。
+
+| 已报告的业务状态 | 整体状态 |
+| --- | --- |
+| 尚无报告，且没有活动队满故障 | Unknown（0），时间戳 0 |
+| 全部 Healthy | Healthy（1） |
+| 全部 Unhealthy | Unhealthy（3） |
+| 其他组合，包括全部 Degraded | Degraded（2） |
+
+例如 connection=Healthy、storage=Unhealthy 时整体为 Degraded；storage 恢复 Healthy 后，整体自动恢复 Healthy。只有一个名称已报告 Healthy 时，整体即为 Healthy。
+
+明细的时间表示各自最后一次有效报告，业务整体的时间取这些记录中最近的有效报告时间，表示最近一次汇总输入，不能解释为所有部分都在该时刻完成检查。普通采集不更新时间，也不按记录年龄自动修改状态；各部分的新鲜度应分别查看其时间指标。
+
+### 接口与指标迁移
+
+本次为破坏性更新：调用方必须给三个健康方法传入业务名称，并处理非法名称错误。两项健康指标增加 `name` 标签；整体查询使用 `{name="overall"}`，明细查询使用具体名称或 `{name!="overall"}`。原来仅按 component 的查询会选中整体和多条明细，需要同步调整告警及仪表盘。
 
 ## 队满自动降级
 
@@ -41,15 +67,15 @@ manager := syslogger.SafeNew(syslogger.Config{
 
 `DegradeOnQueueFull` 默认关闭，启用时需要 `StateEnabled`。`QueueFullRecoveryInterval` 指定连续无队满丢弃的恢复等待时间，零值为 30 秒；`New` 拒绝负值，`SafeNew` 回退默认值并报告配置纠正。
 
-各组件首次队满丢弃时产生自动 Degraded，再次队满丢弃重新计算恢复窗口；连续达到配置时长没有队满丢弃后，自动状态恢复 Healthy。恢复由最后一次队满时刻决定，窗口内成功接收日志或停止产生日志都可以自然到达恢复时刻；队列积压继续按原有发送流程交付。
+各组件首次队满丢弃时可将整体降为 Degraded，再次队满丢弃重新计算恢复窗口；连续达到配置时长没有队满丢弃后，整体重新使用业务汇总。恢复由最后一次队满时刻决定，窗口内成功接收日志或停止产生日志都可以自然到达恢复时刻；队列积压继续按原有发送流程交付。队满不改写任何业务名称的状态和时间。
 
-业务主动上报的 Degraded 或 Unhealthy 持续优先，只有业务主动上报 Healthy 才解除该业务故障。有效状态同时包含仍生效的队满降级，因此窗口内调用 Healthy 后仍显示 Degraded，窗口结束后才显示 Healthy。编码失败、关闭后调用及后台发送失败继续使用各自的诊断和 Counter；自动恢复窗口由队满丢弃事件更新。
+业务汇总的 Degraded 或 Unhealthy 持续优先，由对应名称的后续业务报告改变。业务汇总为 Healthy 或 Unknown 时，活动队满窗口使整体为 Degraded；窗口内业务全部恢复 Healthy 后，整体仍需等待窗口结束。没有任何业务报告时，窗口结束恢复 Unknown/0，日志能力恢复不代表业务健康。编码失败、关闭后调用及后台发送失败继续使用各自的诊断和 Counter；自动恢复窗口只由队满丢弃事件更新。
 
-采集使用业务健康记录及最后队满时刻计算有效状态，HTTP 请求、周期文件快照和管理器内部采集使用同一规则。自动降级时间是最后队满时刻，自动恢复时间是该时刻加恢复窗口；最近的业务 Healthy 汇报继续保留其时间。首次关闭冻结当时的有效状态，最终文件快照及后续内部采集保持该截止结果。
+采集使用具名业务记录及最后队满时刻计算整体，HTTP 请求、周期文件快照和管理器内部采集使用同一规则。队满覆盖整体时，时间为最后队满时刻；窗口结束且业务整体为 Healthy 时，时间取最近业务报告与窗口结束时刻中较新者。业务整体 Degraded/Unhealthy 保留业务汇总时间。首次 Close 固定评估时刻并停止接收业务报告，最终文件快照及后续内部采集保持该截止结果，关闭后不会继续跨过恢复窗口。
 
 ## 指标定义
 
-每个组件独立读写锁，采集复制单组件完整记录后释放锁，输出 I/O 在锁外执行。内置组件 `syslogger_manager` 表达管理器初始化、注册失败及实际注册恢复，具体来源走独立诊断。
+每个组件独立读写锁，采集复制单组件全部记录并派生整体后释放锁，输出 I/O 在锁外执行。内置组件 `syslogger_manager` 通过 `name="overall"` 表达管理器初始化、配置纠正、注册失败及目录故障，继续按各自条件恢复，具体原因走独立诊断。
 
 | 指标 | 类型 | 含义 |
 | --- | --- | --- |
@@ -58,12 +84,18 @@ manager := syslogger.SafeNew(syslogger.Config{
 | `syslogger_component_log_rejected_total` | Counter | 模块接收前拒收的调用累计次数 |
 | `syslogger_component_log_send_failures_total` | Counter | 模块异步及同步发送失败的条目累计数 |
 
-内置样本带 `project、instance_id、component` 三个身份标签。业务组件始终输出两个日志 Counter，显式开启 `EnableHealthMetrics` 后再输出状态和状态时间，内置管理器输出状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
+两项健康指标带 `project、instance_id、component、name` 四个标签，每个业务名称及 overall 各输出一对状态和时间；日志 Counter 保持 `project、instance_id、component` 三个标签，每组件各输出一次。业务组件显式开启 `EnableHealthMetrics` 后输出健康指标，内置管理器在开启状态维护时输出整体状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
+
+```text
+syslogger_component_state{component="rpc",instance_id="api",name="connection",project="demo"} 1
+syslogger_component_state{component="rpc",instance_id="api",name="storage",project="demo"} 3
+syslogger_component_state{component="rpc",instance_id="api",name="overall",project="demo"} 2
+```
 
 官方文本编码为状态指标族输出一条共享的 HELP 注释，所有组件的状态样本共用数值说明；HTTP 与 `.prom` 文件均包含该注释：
 
 ```text
-# HELP syslogger_component_state 组件健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。
+# HELP syslogger_component_state 具名业务及组件整体的健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。
 # TYPE syslogger_component_state gauge
 ```
 
@@ -89,7 +121,9 @@ rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacit
 if err != nil {
     return err
 }
-rpc.Healthy()
+if err := rpc.Healthy("connection"); err != nil {
+    return err
+}
 
 height := prometheus.NewGaugeVec(prometheus.GaugeOpts{
     Name: "alertdog_node_height",

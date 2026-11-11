@@ -15,21 +15,13 @@ func (m *Manager) Close(ctx context.Context) error {
 		return errors.New("syslogger: Close 需要非 nil 上下文")
 	}
 	m.mu.Lock()
-	if !m.closing {
-		closedAt := time.Now()
-		m.closing = true
+	if m.closedAt.IsZero() {
+		m.closedAt = time.Now()
 		if m.startupLogs != nil {
 			m.startupLogs.Stop(ctx)
 		}
 		components := make([]*Component, 0, len(m.components))
 		for _, component := range m.components {
-			if m.cfg.DegradeOnQueueFull {
-				// 接收截止同时冻结有效状态，最终快照沿用截止时的故障或恢复结果。
-				component.mu.Lock()
-				component.current = component.healthAt(closedAt)
-				component.lastQueueFull = time.Time{}
-				component.mu.Unlock()
-			}
 			component.logs.Stop(ctx)
 			components = append(components, component)
 		}

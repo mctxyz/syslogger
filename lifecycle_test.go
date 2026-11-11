@@ -18,7 +18,7 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 	cfg.File.FlushInterval = 5 * time.Millisecond
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
-	c.Degraded()
+	c.Degraded("service")
 	if err := m.StartFile(); err == nil || m.filePhase != outletIdle {
 		t.Fatal("首次写入失败未返回或未清理启动资格")
 	}
@@ -33,6 +33,7 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": cfg.InstanceID,
 		"component":   "rpc",
+		"name":        overallHealthName,
 	}
 	if !hasMetricSample(t, string(first), "syslogger_component_state", labels, 2) {
 		t.Fatal("StartFile 返回时首次快照缺失")
@@ -40,11 +41,11 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 	if m.StartFile() == nil {
 		t.Fatal("重复文件启动未失败")
 	}
-	c.Unhealthy()
+	c.Unhealthy("service")
 	waitUntil(t, func() bool {
 		return hasMetricSample(t, string(readSnapshot(t, cfg.File.OutputPath)), "syslogger_component_state", labels, 3)
 	})
-	c.Healthy()
+	c.Healthy("service")
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 	if !bytes.Equal(final, readSnapshot(t, cfg.File.OutputPath)) {
 		t.Fatal("最终交付之后仍有写入")
 	}
-	c.Unhealthy()
+	c.Unhealthy("service")
 	if err := m.Close(context.Background()); err != nil || !bytes.Equal(final, readSnapshot(t, cfg.File.OutputPath)) {
 		t.Fatal("重复关闭改变最终结果")
 	}
@@ -66,7 +67,7 @@ func TestUnstartedFileDoesNotWriteOnClose(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.File.Enabled = true
 	m := testManager(t, cfg)
-	testComponent(t, m, "rpc").Healthy()
+	testComponent(t, m, "rpc").Healthy("service")
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestPeriodicFileFailureAndSharedFinalError(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("运行期文件错误未被诊断")
 	}
-	c.Unhealthy()
+	c.Unhealthy("service")
 	first := m.Close(context.Background())
 	second := m.Close(context.Background())
 	if first == nil || first != second || !errors.Is(first, os.ErrNotExist) {

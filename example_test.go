@@ -21,14 +21,16 @@ func ExampleComponent_Unhealthy() {
 	if err != nil {
 		panic(err)
 	}
-	rpc.Unhealthy()
+	if err := rpc.Unhealthy("connection"); err != nil {
+		panic(err)
+	}
 	handler, err := manager.Handler()
 	if err != nil {
 		panic(err)
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
-	fmt.Println(strings.Contains(response.Body.String(), `syslogger_component_state{component="rpc",instance_id="common",project="demo"} 3`))
+	fmt.Println(strings.Contains(response.Body.String(), `syslogger_component_state{component="rpc",instance_id="common",name="overall",project="demo"} 3`))
 	// Output: true
 }
 
@@ -45,7 +47,9 @@ func ExampleSafeNew() {
 	if err != nil {
 		panic(err)
 	}
-	rpc.Healthy()
+	if err := rpc.Healthy("connection"); err != nil {
+		panic(err)
+	}
 	handler, err := manager.Handler()
 	if err != nil {
 		panic(err)
@@ -54,7 +58,7 @@ func ExampleSafeNew() {
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
 	containsState := strings.Contains(
 		response.Body.String(),
-		`syslogger_component_state{component="rpc",instance_id="common",project="demo"} 1`,
+		`syslogger_component_state{component="rpc",instance_id="common",name="overall",project="demo"} 1`,
 	)
 	fmt.Println(containsState)
 	// Output: true
@@ -74,7 +78,9 @@ func ExampleManager_Registry() {
 	if err != nil {
 		panic(err)
 	}
-	rpc.Healthy()
+	if err := rpc.Healthy("connection"); err != nil {
+		panic(err)
+	}
 	height := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "business_node_height",
 		Help: "节点高度",
@@ -86,7 +92,7 @@ func ExampleManager_Registry() {
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
 	text := response.Body.String()
 	fmt.Println(strings.Contains(text, `business_node_height{chain="eth"} 123`))
-	fmt.Println(strings.Contains(text, `syslogger_component_state{component="rpc",instance_id="common",project="demo"} 1`))
+	fmt.Println(strings.Contains(text, `syslogger_component_state{component="rpc",instance_id="common",name="overall",project="demo"} 1`))
 	// Output:
 	// true
 	// true

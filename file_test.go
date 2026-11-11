@@ -33,7 +33,7 @@ func TestFileUsesConfiguredPath(t *testing.T) {
 				}
 			}
 			m := testManager(t, cfg)
-			testComponent(t, m, "rpc").Healthy()
+			testComponent(t, m, "rpc").Healthy("service")
 			if err := m.StartFile(); err != nil {
 				t.Fatal(err)
 			}

@@ -41,16 +41,17 @@ type Manager struct {
 	registry             *prometheus.Registry
 	metricDescs          [len(metricDefinitions)]*prometheus.Desc
 	frozen               bool
-	closing              bool
-	starters             sync.WaitGroup
-	httpPhase            outletPhase
-	server               *http.Server
-	httpDone             chan struct{}
-	filePhase            outletPhase
-	fileStop             chan struct{}
-	fileDone             chan struct{}
-	done                 chan struct{}
-	finalErr             error
+	// closedAt 同时表达首次关闭截止及健康状态的固定评估时刻。
+	closedAt  time.Time
+	starters  sync.WaitGroup
+	httpPhase outletPhase
+	server    *http.Server
+	httpDone  chan struct{}
+	filePhase outletPhase
+	fileStop  chan struct{}
+	fileDone  chan struct{}
+	done      chan struct{}
+	finalErr  error
 }
 
 // New 校验配置并注册内置 Collector，启用名称目录时建立后台维护任务。
@@ -97,10 +98,14 @@ func newManager(cfg Config) *Manager {
 		"instance_id": m.id.InstanceID,
 	}
 	for index, definition := range metricDefinitions {
+		variableLabels := []string{"component"}
+		if index < 2 {
+			variableLabels = append(variableLabels, "name")
+		}
 		m.metricDescs[index] = prometheus.NewDesc(
 			definition.name,
 			definition.help,
-			[]string{"component"},
+			variableLabels,
 			labels,
 		)
 	}
@@ -111,7 +116,7 @@ func newManager(cfg Config) *Manager {
 type ComponentConfig struct {
 	Name        string
 	Description string
-	// EnableHealthMetrics 显式导出该组件的状态和状态时间，零值不输出这两项样本。
+	// EnableHealthMetrics 显式导出该组件的具名及整体状态和时间，零值不输出健康样本。
 	// 只控制指标导出；日志 Counter、状态维护及队满降级继续遵守各自配置。
 	EnableHealthMetrics bool
 	// QueueCapacity 为 1～4096 时使用原值，其余值采用 Config.DefaultQueueCapacity。
@@ -137,7 +142,7 @@ func (m *Manager) Register(cfg ComponentConfig) (component *Component, err error
 			m.registrationReporter.Printf("project=%q instance_id=%q: 注册组件失败: %v", m.id.Project, m.id.InstanceID, err)
 		}
 	}()
-	if m.closing || m.frozen {
+	if !m.closedAt.IsZero() || m.frozen {
 		return nil, fmt.Errorf("syslogger: 当前生命周期阶段无法注册组件")
 	}
 	kind := ""

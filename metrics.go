@@ -13,21 +13,21 @@ import (
 
 // metricDefinitions 保持内置指标族及其采集顺序，业务指标由共享注册表独立管理。
 var metricDefinitions = [...]struct {
-	name      string
-	help      string
-	valueType prometheus.ValueType
+	name string
+	help string
 }{
-	{"syslogger_component_state", "组件健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。", prometheus.GaugeValue},
-	{"syslogger_component_timestamp_seconds", "当前健康记录的汇报时间，单位为 Unix 秒，尚无汇报时为 0。", prometheus.GaugeValue},
-	{"syslogger_component_log_rejected_total", "接收前拒收的日志调用累计次数。", prometheus.CounterValue},
-	{"syslogger_component_log_send_failures_total", "异步及同步发送失败的日志条目累计数。", prometheus.CounterValue},
+	{"syslogger_component_state", "具名业务及组件整体的健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。"},
+	{"syslogger_component_timestamp_seconds", "当前健康记录的汇报时间，单位为 Unix 秒，尚无汇报时为 0。"},
+	{"syslogger_component_log_rejected_total", "接收前拒收的日志调用累计次数。"},
+	{"syslogger_component_log_send_failures_total", "异步及同步发送失败的日志条目累计数。"},
 }
 
 // componentSnapshot 是一次采集读取的组件健康事实及日志计数。
 type componentSnapshot struct {
-	Name   string
-	Record record.Record
-	// HealthMetrics 选择导出健康样本，内部 Record 仍供状态与关闭流程使用。
+	Name string
+	// Health 含具名业务记录及同次快照派生的整体，不与组件日志计数交叉展开。
+	Health map[string]record.Record
+	// HealthMetrics 选择导出健康样本，内部记录仍供状态检查使用。
 	HealthMetrics bool
 	HasLogs       bool
 	Rejected      uint64
@@ -53,29 +53,27 @@ func (m *Manager) Collect(ch chan<- prometheus.Metric) {
 	m.frozen = true
 	m.mu.Unlock()
 	for _, component := range m.snapshot() {
-		var timestamp int64
-		if component.Record.Reported {
-			timestamp = component.Record.ObservedAt.Unix()
-		}
-		values := [...]float64{
-			float64(component.Record.State),
-			float64(timestamp),
-			float64(component.Rejected),
-			float64(component.SendFailures),
-		}
-		for index, definition := range metricDefinitions {
-			if index < 2 && !component.HealthMetrics {
-				continue
+		if component.HealthMetrics {
+			for name, health := range component.Health {
+				var timestamp int64
+				if health.Reported {
+					timestamp = health.ObservedAt.Unix()
+				}
+				values := [...]float64{float64(health.State), float64(timestamp)}
+				for index, value := range values {
+					ch <- prometheus.MustNewConstMetric(
+						m.metricDescs[index], prometheus.GaugeValue, value, component.Name, name,
+					)
+				}
 			}
-			if index >= 2 && !component.HasLogs {
-				continue
+		}
+		if component.HasLogs {
+			values := [...]float64{float64(component.Rejected), float64(component.SendFailures)}
+			for index, value := range values {
+				ch <- prometheus.MustNewConstMetric(
+					m.metricDescs[index+2], prometheus.CounterValue, value, component.Name,
+				)
 			}
-			ch <- prometheus.MustNewConstMetric(
-				m.metricDescs[index],
-				definition.valueType,
-				values[index],
-				component.Name,
-			)
 		}
 	}
 }
@@ -83,24 +81,29 @@ func (m *Manager) Collect(ch chan<- prometheus.Metric) {
 // snapshot 复制各组件的完整健康记录，指标输出及业务 Collector 在所有内部锁外执行。
 func (m *Manager) snapshot() []componentSnapshot {
 	m.mu.RLock()
-	components := make([]*Component, 0, len(m.components))
-	for _, component := range m.components {
-		components = append(components, component)
+	defer m.mu.RUnlock()
+	at := m.closedAt
+	if at.IsZero() {
+		at = time.Now()
 	}
 	var result []componentSnapshot
 	if m.diagnostic != nil {
 		result = append(result, componentSnapshot{
 			Name:          diagnostic.ComponentName,
-			Record:        m.diagnostic.Current,
+			Health:        map[string]record.Record{overallHealthName: m.diagnostic.Current},
 			HealthMetrics: true,
 		})
 	}
-	m.mu.RUnlock()
-	for _, component := range components {
+	for _, component := range m.components {
 		component.mu.RLock()
+		health := make(map[string]record.Record, len(component.health)+1)
+		for name, business := range component.health {
+			health[name] = business
+		}
+		health[overallHealthName] = component.healthAt(at)
 		item := componentSnapshot{
 			Name:          component.name,
-			Record:        component.healthAt(time.Now()),
+			Health:        health,
 			HealthMetrics: component.enableHealthMetrics,
 			HasLogs:       true,
 		}

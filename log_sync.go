@@ -23,7 +23,7 @@ func (c *Component) CriticalSync(ctx context.Context, message string, fields Fie
 	return c.logSync(ctx, logging.Critical, message, fields)
 }
 
-// ErrorSync 同步发送 severity 3 事件，错误直接返回，组件健康状态由业务单独维护。
+// ErrorSync 同步发送 severity 3 事件，错误直接返回，具名业务健康由调用方另行上报。
 func (c *Component) ErrorSync(ctx context.Context, message string, fields Fields) error {
 	return c.logSync(ctx, logging.Error, message, fields)
 }
@@ -67,7 +67,7 @@ func (c *Component) logSync(ctx context.Context, level logging.Level, message st
 		return err
 	}
 	m.mu.RLock()
-	closing := m.closing
+	closing := !m.closedAt.IsZero()
 	m.mu.RUnlock()
 	if closing {
 		c.logs.Reject()

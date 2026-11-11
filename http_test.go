@@ -16,7 +16,7 @@ func TestExternalHandlerAndFixedCollection(t *testing.T) {
 	cfg.HTTP.Enabled = true
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
-	c.Unhealthy()
+	c.Unhealthy("service")
 	handler, err := m.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +31,7 @@ func TestExternalHandlerAndFixedCollection(t *testing.T) {
 		"project":     "demo",
 		"instance_id": "instance-a",
 		"component":   "rpc",
+		"name":        overallHealthName,
 	}
 	if response.Code != 200 || !strings.Contains(response.Header().Get("Content-Type"), "version=0.0.4") || !hasMetricSample(t, text, "syslogger_component_state", labels, 3) {
 		t.Fatalf("指标响应不符: %s", text)
@@ -107,7 +108,7 @@ func TestCommonIdentityAcrossLogsHTTPAndFile(t *testing.T) {
 	cfg.File.Enabled = true
 	m := testManager(t, cfg)
 	c := testComponent(t, m, "rpc")
-	c.Healthy()
+	c.Healthy("service")
 	c.Info("默认身份", nil)
 	if !strings.Contains(string(receive(t, receiver)), `"instance_id":"common"`) {
 		t.Fatal("日志未使用默认实例身份")
