@@ -19,7 +19,9 @@ type Component struct {
 	enableHealthMetrics bool
 	logs                *logging.Queue
 	logReporter         diagnostic.Reporter
-	mu                  sync.RWMutex
+	// healthReporter 单独限流非法健康名称的诊断，保留日志交付诊断的输出机会。
+	healthReporter diagnostic.Reporter
+	mu             sync.RWMutex
 	// health 保存业务按名称上报的权威记录，组件整体由这些记录派生。
 	health map[string]record.Record
 	// lastQueueFull 由真实的队满拒收更新，以组件锁保护恢复窗口的唯一时间依据。

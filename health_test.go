@@ -3,6 +3,8 @@ package syslogger
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,19 +19,13 @@ func TestNamedHealthReports(t *testing.T) {
 	if got := currentRecord(t, m, "a"); got != (record.Record{}) || len(a.health) != 0 {
 		t.Fatalf("没有报告时应为 Unknown/0: %+v", got)
 	}
-	if err := a.Healthy("connection"); err != nil {
-		t.Fatal(err)
-	}
+	a.Healthy("connection")
 	first := a.health["connection"]
 	if currentRecord(t, m, "a") != first || first.State != int(StateHealthy) {
 		t.Fatal("首份业务报告未直接建立整体健康")
 	}
-	if err := b.Unhealthy("connection"); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Unhealthy("storage"); err != nil {
-		t.Fatal(err)
-	}
+	b.Unhealthy("connection")
+	a.Unhealthy("storage")
 	if currentRecord(t, m, "a").State != int(StateDegraded) || currentRecord(t, m, "b").State != int(StateUnhealthy) {
 		t.Fatal("混合业务状态未降级，或跨组件同名状态发生串扰")
 	}
@@ -37,15 +33,11 @@ func TestNamedHealthReports(t *testing.T) {
 	if a.health["connection"] != first {
 		t.Fatal("其他名称的报告覆盖了既有记录")
 	}
-	if err := a.Healthy("connection"); err != nil {
-		t.Fatal(err)
-	}
+	a.Healthy("connection")
 	if len(a.health) != 2 || a.health["connection"].ObservedAt.Before(first.ObservedAt) || a.health["storage"] != storage {
 		t.Fatal("同名报告未更新原记录，或覆盖了其他名称")
 	}
-	if err := a.Healthy("storage"); err != nil {
-		t.Fatal(err)
-	}
+	a.Healthy("storage")
 	if currentRecord(t, m, "a").State != int(StateHealthy) || currentRecord(t, m, "b").State != int(StateUnhealthy) {
 		t.Fatal("组件整体未随独立业务恢复，或影响其他组件")
 	}
@@ -53,9 +45,7 @@ func TestNamedHealthReports(t *testing.T) {
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Unhealthy("late"); err != nil {
-		t.Fatal(err)
-	}
+	a.Unhealthy("late")
 	if len(a.health) != 2 {
 		t.Fatal("关闭截止后仍建立了新名称")
 	}
@@ -96,22 +86,31 @@ func TestNamedHealthAggregation(t *testing.T) {
 }
 
 func TestHealthNameValidation(t *testing.T) {
+	for _, name := range []string{"", " \t", "bad\xff", overallHealthName} {
+		t.Run(strconv.Quote(name), func(t *testing.T) {
+			capture := captureLogs(t)
+			m := testManager(t, testConfig(t))
+			c := testComponent(t, m, "rpc")
+			c.Healthy("existing")
+			before := currentRecord(t, m, c.name)
+			for _, report := range []func(string){c.Healthy, c.Degraded, c.Unhealthy} {
+				report(name)
+			}
+			if len(c.health) != 1 || c.health["existing"] != before || currentRecord(t, m, c.name) != before {
+				t.Fatal("非法报告改变了已有记录或整体状态")
+			}
+			if rejected, failed := c.logs.Counts(); rejected != 0 || failed != 0 {
+				t.Fatal("非法健康报告影响了日志 Counter")
+			}
+			if !strings.Contains(capture.String(), "name="+strconv.Quote(name)) {
+				t.Fatalf("非法健康名称缺少独立诊断: %s", capture.String())
+			}
+		})
+	}
 	m := testManager(t, testConfig(t))
 	c := testComponent(t, m, "rpc")
-	for _, name := range []string{"", " \t", "bad\xff", overallHealthName} {
-		for _, report := range []func(string) error{c.Healthy, c.Degraded, c.Unhealthy} {
-			if err := report(name); err == nil {
-				t.Fatalf("非法健康名称未被拒绝: %q", name)
-			}
-		}
-		if len(c.health) != 0 || currentRecord(t, m, "rpc").Reported {
-			t.Fatal("非法报告形成了状态或时间副作用")
-		}
-	}
 	for _, name := range []string{"storage", "Storage", " storage ", "连接\"\\\n状态"} {
-		if err := c.Healthy(name); err != nil {
-			t.Fatal(err)
-		}
+		c.Healthy(name)
 		if _, exists := c.health[name]; !exists {
 			t.Fatalf("业务名称未保留原文: %q", name)
 		}
@@ -122,8 +121,25 @@ func TestHealthNameValidation(t *testing.T) {
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Healthy(overallHealthName); err == nil {
-		t.Fatal("关闭后仍须拒绝非法报告参数")
+	before := currentRecord(t, m, c.name)
+	c.Healthy(overallHealthName)
+	if len(c.health) != 4 || currentRecord(t, m, c.name) != before {
+		t.Fatal("关闭后的非法报告改变了记录")
+	}
+}
+
+func TestHealthDiagnosticsAreIndependent(t *testing.T) {
+	capture := captureLogs(t)
+	m := testManager(t, testConfig(t))
+	c := testComponent(t, m, "rpc")
+	c.Healthy(overallHealthName)
+	c.Info("编码失败", Fields{"value": make(chan int)})
+	text := capture.String()
+	if !strings.Contains(text, "健康报告已拒绝") || !strings.Contains(text, "日志提交失败") {
+		t.Fatalf("健康诊断抑制了独立日志诊断: %s", text)
+	}
+	for _, component := range []*Component{nil, {}} {
+		component.Unhealthy(overallHealthName)
 	}
 }
 
@@ -137,14 +153,8 @@ func TestConcurrentNamedHealthSnapshots(t *testing.T) {
 			defer workers.Done()
 			name := fmt.Sprintf("part-%d", n)
 			for iteration := 0; iteration < 100; iteration++ {
-				if err := c.Healthy(name); err != nil {
-					t.Error(err)
-					return
-				}
-				if err := c.Unhealthy(name); err != nil {
-					t.Error(err)
-					return
-				}
+				c.Healthy(name)
+				c.Unhealthy(name)
 				for _, item := range m.snapshot() {
 					if item.Name != c.name {
 						continue

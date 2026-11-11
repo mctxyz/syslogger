@@ -99,7 +99,7 @@ type Reporter struct {
 	last time.Time
 }
 
-// Printf 最多每秒输出一次摘要，累计次数由对应指标完整保留。
+// Printf 最多每秒输出一次摘要；需要累计错误次数时，由调用方维护相应指标。
 func (r *Reporter) Printf(format string, args ...any) {
 	now := time.Now()
 	r.mu.Lock()

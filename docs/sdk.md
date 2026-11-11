@@ -35,9 +35,7 @@ if err != nil {
 if err := manager.StartHTTP(); err != nil {
     return err
 }
-if err := rpc.Unhealthy("connection"); err != nil {
-    return err
-}
+rpc.Unhealthy("connection")
 ```
 
 已有服务器通过 `Handler()` 挂载，服务器归业务管理。模块在取得 Handler、开始启动指标出口或首次通过 Registry 采集之前完成注册；配置及组件集合之后固定。模块注册后日志即可使用，业务退出时调用 `Close(ctx)`。

@@ -10,9 +10,7 @@ SDK 按组件发送结构化日志，身份来自[管理器和组件注册](sdk.
 rpc.Info("RPC 已连接", syslogger.Fields{
     "endpoint": "primary",
 })
-if err := rpc.Healthy("connection"); err != nil {
-    return err
-}
+rpc.Healthy("connection")
 ```
 
 日志与业务健康状态分别调用，健康维护的启用方式见[健康与指标](metrics.md)。日志正文示例：

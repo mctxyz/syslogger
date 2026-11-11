@@ -279,21 +279,15 @@ func TestDynamicNamedHealthAcrossOutlets(t *testing.T) {
 	m := testManager(t, cfg)
 	a := testComponent(t, m, "a")
 	b := testComponent(t, m, "b")
-	if err := a.Healthy("shared"); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.Unhealthy("shared"); err != nil {
-		t.Fatal(err)
-	}
+	a.Healthy("shared")
+	b.Unhealthy("shared")
 	// 固定既有记录的时间，验证最新整体时间不会覆盖旧明细的时间。
 	at := time.Unix(1794378816, 0)
 	a.health["shared"] = record.New(int(StateHealthy), at)
 	if _, err := m.Registry().Gather(); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Unhealthy("late\"\\\n名称"); err != nil {
-		t.Fatal(err)
-	}
+	a.Unhealthy("late\"\\\n名称")
 	latest := a.health["late\"\\\n名称"]
 	a.logs.Reject()
 	a.logs.Reject()

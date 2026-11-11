@@ -21,9 +21,7 @@ func ExampleComponent_Unhealthy() {
 	if err != nil {
 		panic(err)
 	}
-	if err := rpc.Unhealthy("connection"); err != nil {
-		panic(err)
-	}
+	rpc.Unhealthy("connection")
 	handler, err := manager.Handler()
 	if err != nil {
 		panic(err)
@@ -47,9 +45,7 @@ func ExampleSafeNew() {
 	if err != nil {
 		panic(err)
 	}
-	if err := rpc.Healthy("connection"); err != nil {
-		panic(err)
-	}
+	rpc.Healthy("connection")
 	handler, err := manager.Handler()
 	if err != nil {
 		panic(err)
@@ -78,9 +74,7 @@ func ExampleManager_Registry() {
 	if err != nil {
 		panic(err)
 	}
-	if err := rpc.Healthy("connection"); err != nil {
-		panic(err)
-	}
+	rpc.Healthy("connection")
 	height := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "business_node_height",
 		Help: "节点高度",
