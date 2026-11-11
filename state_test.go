@@ -73,7 +73,7 @@ func TestQueueHealthStateComposition(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			c.mu.Lock()
-			c.health = make(map[string]record.Record)
+			c.health = make(map[HealthName]record.Record)
 			if test.business.Reported {
 				c.health["service"] = test.business
 			}
@@ -89,7 +89,7 @@ func TestQueueHealthStateComposition(t *testing.T) {
 	for _, state := range []State{StateDegraded, StateUnhealthy} {
 		business := record.New(int(state), droppedAt.Add(-time.Second))
 		c.mu.Lock()
-		c.health = map[string]record.Record{"service": business}
+		c.health = map[HealthName]record.Record{"service": business}
 		c.lastQueueFull = droppedAt
 		during := c.healthAt(droppedAt)
 		after := c.healthAt(deadline)
@@ -159,7 +159,7 @@ func TestQueueHealthWindowOutletsAndClose(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": cfg.InstanceID,
 		"component":   "saturated",
-		"name":        overallHealthName,
+		"name":        string(overallHealthName),
 	}
 	for _, text := range []string{response.Body.String(), string(readSnapshot(t, cfg.File.OutputPath))} {
 		if !hasMetricSample(t, text, "syslogger_component_state", labels, 2) {

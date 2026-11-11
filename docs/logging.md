@@ -7,10 +7,12 @@ SDK 按组件发送结构化日志，身份来自[管理器和组件注册](sdk.
 普通异步方法为 `Emergency、Alert、Critical、Error、Warning、Notice、Info、Debug`，对应原生 severity 0～7。方法接收 `(message string, fields Fields)`，无返回值，字段可传 nil。`Fields` 是以 `map[string]any` 为底层类型的结构化业务字段类型，调用方使用 `syslogger.Fields` 构造字段；八级事件统一提交，等级过滤交由设备日志服务配置，进程退出由业务管理。
 
 ```go
+const rpcConnection syslogger.HealthName = "connection"
+
 rpc.Info("RPC 已连接", syslogger.Fields{
     "endpoint": "primary",
 })
-rpc.Healthy("connection")
+rpc.Healthy(rpcConnection)
 ```
 
 日志与业务健康状态分别调用，健康维护的启用方式见[健康与指标](metrics.md)。日志正文示例：

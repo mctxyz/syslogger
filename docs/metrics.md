@@ -4,13 +4,18 @@
 
 ## 状态维护与逐组件导出
 
-`Healthy(name string)`、`Degraded(name string)`、`Unhealthy(name string)` 无返回值，同步提交该名称的业务状态及库采集的时间。名称在所属组件内唯一，不同组件可以使用相同名称；同名报告更新原记录，不同名称独立维护。名称保留合法 UTF-8 原文、区分大小写，必须包含非空白内容；`overall` 是 SDK 的整体输出保留名。非法名称拒绝写入且不修改任何记录，通过标准日志独立诊断，有效组件的连续名称错误按组件每秒最多输出一次，不占用日志交付诊断的限流窗口。合法名称在状态维护关闭、无效组件句柄或管理器关闭截止后安全忽略。
+`Healthy(name HealthName)`、`Degraded(name HealthName)`、`Unhealthy(name HealthName)` 无返回值，同步提交该名称的业务状态及库采集的时间。`HealthName` 是以 string 为底层的定义类型，业务按组件集中声明该类型的常量，便于复用名称和查看组件有哪些状态。名称在所属组件内唯一，不同组件可以使用相同名称；同名报告更新原记录，不同名称独立维护。名称保留合法 UTF-8 原文、区分大小写，必须包含非空白内容；`overall` 是 SDK 的整体输出保留名。非法名称拒绝写入且不修改任何记录，通过标准日志独立诊断，有效组件的连续名称错误按组件每秒最多输出一次，不占用日志交付诊断的限流窗口。合法名称在状态维护关闭、无效组件句柄或管理器关闭截止后安全忽略。
 
 状态维护默认关闭，通过 `Config.StateEnabled` 开启。业务首次报告时建立对应名称，之后即使已开始采集也可报告新的名称，无需预先声明。SDK 只汇总已报告的名称，尚未出现的名称不参与计算。每份记录由较新的业务入口时间整体替换，相同时间由后提交者覆盖，同状态也更新时间；已出现的记录持续参与汇总，由业务后续报告更新。名称应选用数量可控的稳定业务名称。
 
 `ComponentConfig.EnableHealthMetrics` 控制该组件是否导出 `syslogger_component_state` 和 `syslogger_component_timestamp_seconds`，默认 `false` 不输出这两项样本，需要时在注册阶段显式开启：
 
 ```go
+const (
+    rpcConnection syslogger.HealthName = "connection"
+    rpcStorage    syslogger.HealthName = "storage"
+)
+
 rpc, err := manager.Register(syslogger.ComponentConfig{
     Name: "rpc",
     EnableHealthMetrics: true,
@@ -22,10 +27,12 @@ runtime, err := manager.Register(syslogger.ComponentConfig{Name: "runtime"})
 if err != nil {
     return err
 }
-rpc.Healthy("connection")
-rpc.Unhealthy("storage")
+rpc.Healthy(rpcConnection)
+rpc.Unhealthy(rpcStorage)
 runtime.Info("进程已启动", nil)
 ```
+
+常量块由业务定义，可放在所属组件的代码文件中，SDK 不预置业务名称。普通 string 变量或显式 string 类型常量需要通过 `syslogger.HealthName(value)` 转换；Go 仍允许直接传入字符串字面量，常量复用是推荐约定，不是编译器对调用方式的强制限制。SDK 不枚举常量，是否参与整体汇总仍取决于实际报告。
 
 该选项只控制导出，注册后固定：全局 `Config.StateEnabled` 控制具名健康记录维护及整体汇总；显式开启导出但状态维护关闭时，只输出整体 Unknown/0。两个日志 Counter 始终按原日志路径维护并参与采集，日志发送、同步日志及名称目录小时接收量不受此选项影响。管理器内置 `syslogger_manager` 的健康指标继续遵守全局状态配置。
 
@@ -48,7 +55,7 @@ HTTP、文件和外部共享 Registry 使用同一个 Collector，按组件采�
 
 ### 接口与指标迁移
 
-本次为破坏性更新：调用方给三个无返回值的健康方法传入业务名称，非法名称通过库内诊断定位。两项健康指标增加 `name` 标签；整体查询使用 `{name="overall"}`，明细查询使用具体名称或 `{name!="overall"}`。原来仅按 component 的查询会选中整体和多条明细，需要同步调整告警及仪表盘。
+本次为破坏性更新：调用方给三个无返回值的健康方法传入 `HealthName`，原有 string 变量、显式 string 常量及接口／方法值签名需同步迁移；动态来源在调用边界显式转换，非法名称继续由库内诊断定位。两项健康指标的文本及 `name` 标签值保持字符串形式，整体查询使用 `{name="overall"}`，明细查询使用具体名称或 `{name!="overall"}`。从三标签指标升级时，原来仅按 component 的查询会选中整体和多条明细，需要同步调整告警及仪表盘。
 
 ## 队满自动降级
 
@@ -117,7 +124,8 @@ rpc, err := manager.Register(syslogger.ComponentConfig{Name: "rpc", QueueCapacit
 if err != nil {
     return err
 }
-rpc.Healthy("connection")
+const rpcConnection syslogger.HealthName = "connection"
+rpc.Healthy(rpcConnection)
 
 height := prometheus.NewGaugeVec(prometheus.GaugeOpts{
     Name: "alertdog_node_height",

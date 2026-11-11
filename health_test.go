@@ -74,7 +74,7 @@ func TestNamedHealthAggregation(t *testing.T) {
 		{StateUnhealthy, StateUnhealthy, StateUnhealthy},
 	} {
 		t.Run(fmt.Sprintf("%d/%d", test.first, test.second), func(t *testing.T) {
-			c.health = map[string]record.Record{
+			c.health = map[HealthName]record.Record{
 				"first":  record.New(int(test.first), at),
 				"second": record.New(int(test.second), at.Add(time.Second)),
 			}
@@ -86,14 +86,14 @@ func TestNamedHealthAggregation(t *testing.T) {
 }
 
 func TestHealthNameValidation(t *testing.T) {
-	for _, name := range []string{"", " \t", "bad\xff", overallHealthName} {
-		t.Run(strconv.Quote(name), func(t *testing.T) {
+	for _, name := range []HealthName{"", " \t", "bad\xff", overallHealthName} {
+		t.Run(strconv.Quote(string(name)), func(t *testing.T) {
 			capture := captureLogs(t)
 			m := testManager(t, testConfig(t))
 			c := testComponent(t, m, "rpc")
 			c.Healthy("existing")
 			before := currentRecord(t, m, c.name)
-			for _, report := range []func(string){c.Healthy, c.Degraded, c.Unhealthy} {
+			for _, report := range []func(HealthName){c.Healthy, c.Degraded, c.Unhealthy} {
 				report(name)
 			}
 			if len(c.health) != 1 || c.health["existing"] != before || currentRecord(t, m, c.name) != before {
@@ -102,14 +102,14 @@ func TestHealthNameValidation(t *testing.T) {
 			if rejected, failed := c.logs.Counts(); rejected != 0 || failed != 0 {
 				t.Fatal("非法健康报告影响了日志 Counter")
 			}
-			if !strings.Contains(capture.String(), "name="+strconv.Quote(name)) {
+			if !strings.Contains(capture.String(), "name="+strconv.Quote(string(name))) {
 				t.Fatalf("非法健康名称缺少独立诊断: %s", capture.String())
 			}
 		})
 	}
 	m := testManager(t, testConfig(t))
 	c := testComponent(t, m, "rpc")
-	for _, name := range []string{"storage", "Storage", " storage ", "连接\"\\\n状态"} {
+	for _, name := range []HealthName{"storage", "Storage", " storage ", "连接\"\\\n状态"} {
 		c.Healthy(name)
 		if _, exists := c.health[name]; !exists {
 			t.Fatalf("业务名称未保留原文: %q", name)
@@ -151,7 +151,7 @@ func TestConcurrentNamedHealthSnapshots(t *testing.T) {
 		workers.Add(1)
 		go func(n int) {
 			defer workers.Done()
-			name := fmt.Sprintf("part-%d", n)
+			name := HealthName(fmt.Sprintf("part-%d", n))
 			for iteration := 0; iteration < 100; iteration++ {
 				c.Healthy(name)
 				c.Unhealthy(name)

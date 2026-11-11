@@ -11,6 +11,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// 业务按组件集中定义健康名称，调用时复用同一组常量。
+const (
+	rpcConnection syslogger.HealthName = "connection"
+	rpcStorage    syslogger.HealthName = "storage"
+)
+
 func ExampleComponent_Unhealthy() {
 	manager, err := syslogger.New(syslogger.Config{Project: "demo", StateEnabled: true, HTTP: syslogger.HTTPConfig{Enabled: true}})
 	if err != nil {
@@ -21,7 +27,7 @@ func ExampleComponent_Unhealthy() {
 	if err != nil {
 		panic(err)
 	}
-	rpc.Unhealthy("connection")
+	rpc.Unhealthy(rpcConnection)
 	handler, err := manager.Handler()
 	if err != nil {
 		panic(err)
@@ -45,7 +51,8 @@ func ExampleSafeNew() {
 	if err != nil {
 		panic(err)
 	}
-	rpc.Healthy("connection")
+	rpc.Healthy(rpcConnection)
+	rpc.Healthy(rpcStorage)
 	handler, err := manager.Handler()
 	if err != nil {
 		panic(err)
@@ -74,7 +81,7 @@ func ExampleManager_Registry() {
 	if err != nil {
 		panic(err)
 	}
-	rpc.Healthy("connection")
+	rpc.Healthy(rpcConnection)
 	height := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "business_node_height",
 		Help: "节点高度",

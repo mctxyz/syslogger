@@ -31,7 +31,7 @@ func TestExternalHandlerAndFixedCollection(t *testing.T) {
 		"project":     "demo",
 		"instance_id": "instance-a",
 		"component":   "rpc",
-		"name":        overallHealthName,
+		"name":        string(overallHealthName),
 	}
 	if response.Code != 200 || !strings.Contains(response.Header().Get("Content-Type"), "version=0.0.4") || !hasMetricSample(t, text, "syslogger_component_state", labels, 3) {
 		t.Fatalf("指标响应不符: %s", text)

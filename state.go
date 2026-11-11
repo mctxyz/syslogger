@@ -9,6 +9,9 @@ import (
 	"github.com/mctxyz/syslogger/internal/record"
 )
 
+// HealthName 标识组件内的一份业务健康记录，调用方可按组件集中声明该类型的常量。
+type HealthName string
+
 // State 是组件当前健康结论，同时作为状态 Gauge 的数值。
 type State int
 
@@ -24,26 +27,26 @@ const (
 )
 
 // overallHealthName 标识 SDK 派生的组件整体，业务名称不能占用它。
-const overallHealthName = "overall"
+const overallHealthName HealthName = "overall"
 
 // Healthy 同步汇报指定名称的业务正常；同名报告更新同一条状态及时间。
 // 非法名称拒绝写入并独立诊断，合法报告在状态维护关闭或管理器关闭后安全忽略。
-func (c *Component) Healthy(name string) {
+func (c *Component) Healthy(name HealthName) {
 	c.setState(name, StateHealthy)
 }
 
 // Degraded 同步汇报指定名称的部分能力受损，仅由该名称后续报告恢复。
-func (c *Component) Degraded(name string) {
+func (c *Component) Degraded(name HealthName) {
 	c.setState(name, StateDegraded)
 }
 
 // Unhealthy 同步汇报指定名称无法正常履行职责，不覆盖其他名称的记录。
-func (c *Component) Unhealthy(name string) {
+func (c *Component) Unhealthy(name HealthName) {
 	c.setState(name, StateUnhealthy)
 }
 
-func (c *Component) setState(name string, state State) {
-	err := validateName(name)
+func (c *Component) setState(name HealthName, state State) {
+	err := validateName(string(name))
 	if err == nil && name == overallHealthName {
 		err = fmt.Errorf("健康名称 %q 用于组件整体汇总", name)
 	}
@@ -71,7 +74,7 @@ func (c *Component) setState(name string, state State) {
 	}
 	c.mu.Lock()
 	if c.health == nil {
-		c.health = make(map[string]record.Record)
+		c.health = make(map[HealthName]record.Record)
 	}
 	current := c.health[name]
 	current.Apply(record.New(int(state), at))

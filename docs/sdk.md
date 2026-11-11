@@ -13,6 +13,8 @@ import "github.com/mctxyz/syslogger"
 下方为初始化片段，业务在 `New` 成功后接管管理器的关闭职责，后续初始化失败也需要收尾；正常运行时，管理器的生命周期应覆盖业务使用期：
 
 ```go
+const rpcConnection syslogger.HealthName = "connection"
+
 manager, err := syslogger.New(syslogger.Config{
     Project: "contract-listener",
     InstanceID: instanceID,
@@ -35,7 +37,7 @@ if err != nil {
 if err := manager.StartHTTP(); err != nil {
     return err
 }
-rpc.Unhealthy("connection")
+rpc.Unhealthy(rpcConnection)
 ```
 
 已有服务器通过 `Handler()` 挂载，服务器归业务管理。模块在取得 Handler、开始启动指标出口或首次通过 Registry 采集之前完成注册；配置及组件集合之后固定。模块注册后日志即可使用，业务退出时调用 `Close(ctx)`。

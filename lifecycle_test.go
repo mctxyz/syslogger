@@ -33,7 +33,7 @@ func TestFileFirstSnapshotRetryAndFinalOrdering(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": cfg.InstanceID,
 		"component":   "rpc",
-		"name":        overallHealthName,
+		"name":        string(overallHealthName),
 	}
 	if !hasMetricSample(t, string(first), "syslogger_component_state", labels, 2) {
 		t.Fatal("StartFile 返回时首次快照缺失")

@@ -99,7 +99,7 @@ func TestComponentHealthMetricsOptIn(t *testing.T) {
 							want["syslogger_component_timestamp_seconds"] = float64(currentRecord(t, m, c.name).ObservedAt.Unix())
 						}
 					}
-					labels["name"] = overallHealthName
+					labels["name"] = string(overallHealthName)
 					assertComponentMetricSet(t, string(data), labels, want)
 					labels["name"] = "service"
 					if !stateEnabled {
@@ -111,7 +111,7 @@ func TestComponentHealthMetricsOptIn(t *testing.T) {
 					t.Fatal("健康导出开关改变了内部状态维护")
 				}
 				if stateEnabled {
-					labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": diagnostic.ComponentName, "name": overallHealthName}
+					labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": diagnostic.ComponentName, "name": string(overallHealthName)}
 					record := currentRecord(t, m, diagnostic.ComponentName)
 					assertComponentMetricSet(t, string(data), labels, map[string]float64{
 						"syslogger_component_state":             float64(record.State),
@@ -181,8 +181,8 @@ func TestHealthMetricsSelectionAcrossOutlets(t *testing.T) {
 			"syslogger_component_log_rejected_total":      0,
 			"syslogger_component_log_send_failures_total": 0,
 		})
-		for _, name := range []string{overallHealthName, "service"} {
-			labels["name"] = name
+		for _, name := range []HealthName{overallHealthName, "service"} {
+			labels["name"] = string(name)
 			assertComponentMetricSet(t, text, labels, map[string]float64{
 				"syslogger_component_state":             float64(StateHealthy),
 				"syslogger_component_timestamp_seconds": float64(currentRecord(t, m, monitored.name).ObservedAt.Unix()),
@@ -228,7 +228,7 @@ func TestAllComponentHealthMetricsDisabled(t *testing.T) {
 		})
 		if stateEnabled {
 			labels["component"] = diagnostic.ComponentName
-			labels["name"] = overallHealthName
+			labels["name"] = string(overallHealthName)
 			record := currentRecord(t, m, diagnostic.ComponentName)
 			assertComponentMetricSet(t, string(data), labels, map[string]float64{
 				"syslogger_component_state":             float64(record.State),
@@ -320,20 +320,20 @@ func TestDynamicNamedHealthAcrossOutlets(t *testing.T) {
 			"syslogger_component_log_rejected_total":      2,
 			"syslogger_component_log_send_failures_total": 0,
 		})
-		for name, health := range map[string]record.Record{
+		for name, health := range map[HealthName]record.Record{
 			"shared":          record.New(int(StateHealthy), at),
 			"late\"\\\n名称":    latest,
 			overallHealthName: record.New(int(StateDegraded), latest.ObservedAt),
 		} {
-			labels["name"] = name
+			labels["name"] = string(name)
 			assertComponentMetricSet(t, text, labels, map[string]float64{
 				"syslogger_component_state":             float64(health.State),
 				"syslogger_component_timestamp_seconds": float64(health.ObservedAt.Unix()),
 			})
 		}
 		labels["component"] = b.name
-		for _, name := range []string{"shared", overallHealthName} {
-			labels["name"] = name
+		for _, name := range []HealthName{"shared", overallHealthName} {
+			labels["name"] = string(name)
 			assertComponentMetricSet(t, text, labels, map[string]float64{
 				"syslogger_component_state":             float64(StateUnhealthy),
 				"syslogger_component_timestamp_seconds": float64(b.health["shared"].ObservedAt.Unix()),

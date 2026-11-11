@@ -153,7 +153,7 @@ func TestSafeNewDiagnosticsAndUsability(t *testing.T) {
 		"project":     "common",
 		"instance_id": "common",
 		"component":   diagnostic.ComponentName,
-		"name":        overallHealthName,
+		"name":        string(overallHealthName),
 	}
 	if response.Code != http.StatusOK || !hasMetricSample(t, response.Body.String(), "syslogger_component_state", labels, 3) {
 		t.Fatalf("HTTP 指标未展示管理器异常：%s", response.Body.String())
@@ -272,7 +272,7 @@ func TestSafeNewWorkingOutlets(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": cfg.InstanceID,
 		"component":   diagnostic.ComponentName,
-		"name":        overallHealthName,
+		"name":        string(overallHealthName),
 	}
 	if !hasMetricSample(t, string(file), "syslogger_component_state", labels, 3) {
 		t.Fatal("指标出口未保留初始化异常状态")

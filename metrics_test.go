@@ -31,7 +31,7 @@ func metricFixture(t *testing.T) *Manager {
 	rpc := testComponent(t, m, "rpc")
 	testComponent(t, m, "a")
 	rpc.mu.Lock()
-	rpc.health = map[string]record.Record{"service": record.New(int(StateUnhealthy), time.Unix(1792656000, 123))}
+	rpc.health = map[HealthName]record.Record{"service": record.New(int(StateUnhealthy), time.Unix(1792656000, 123))}
 	rpc.mu.Unlock()
 	rpc.logs.Reject()
 	rpc.logs.Reject()
@@ -101,7 +101,7 @@ func TestNativeCollectorContract(t *testing.T) {
 		if strings.HasSuffix(name, "_total") {
 			delete(labels, "name")
 		} else {
-			labels["name"] = overallHealthName
+			labels["name"] = string(overallHealthName)
 		}
 		if !hasMetricSample(t, string(data), name, labels, value) {
 			t.Fatalf("内置样本不符: %s", name)
@@ -110,7 +110,7 @@ func TestNativeCollectorContract(t *testing.T) {
 	labels["component"] = "a"
 	for index, definition := range metricDefinitions {
 		if index < 2 {
-			labels["name"] = overallHealthName
+			labels["name"] = string(overallHealthName)
 		} else {
 			delete(labels, "name")
 		}
@@ -231,7 +231,7 @@ func TestRegistryIsolationAndSharedInstances(t *testing.T) {
 		"project":     cfg.Project,
 		"instance_id": "instance-a",
 		"component":   "rpc",
-		"name":        overallHealthName,
+		"name":        string(overallHealthName),
 	}
 	if !hasMetricSample(t, string(data), "syslogger_component_state", labels, 1) {
 		t.Fatal("共享注册表丢失首个实例的状态")
@@ -435,7 +435,7 @@ func TestLongIdentityValues(t *testing.T) {
 			"project":     cfg.Project,
 			"instance_id": cfg.InstanceID,
 			"component":   name,
-			"name":        overallHealthName,
+			"name":        string(overallHealthName),
 		}
 		if !hasMetricSample(t, string(data), "syslogger_component_state", labels, 1) {
 			t.Fatal("长身份值被拒绝、替换或截断")

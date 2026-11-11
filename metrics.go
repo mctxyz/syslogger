@@ -26,7 +26,7 @@ var metricDefinitions = [...]struct {
 type componentSnapshot struct {
 	Name string
 	// Health 含具名业务记录及同次快照派生的整体，不与组件日志计数交叉展开。
-	Health map[string]record.Record
+	Health map[HealthName]record.Record
 	// HealthMetrics 选择导出健康样本，内部记录仍供状态检查使用。
 	HealthMetrics bool
 	HasLogs       bool
@@ -62,7 +62,7 @@ func (m *Manager) Collect(ch chan<- prometheus.Metric) {
 				values := [...]float64{float64(health.State), float64(timestamp)}
 				for index, value := range values {
 					ch <- prometheus.MustNewConstMetric(
-						m.metricDescs[index], prometheus.GaugeValue, value, component.Name, name,
+						m.metricDescs[index], prometheus.GaugeValue, value, component.Name, string(name),
 					)
 				}
 			}
@@ -90,13 +90,13 @@ func (m *Manager) snapshot() []componentSnapshot {
 	if m.diagnostic != nil {
 		result = append(result, componentSnapshot{
 			Name:          diagnostic.ComponentName,
-			Health:        map[string]record.Record{overallHealthName: m.diagnostic.Current},
+			Health:        map[HealthName]record.Record{overallHealthName: m.diagnostic.Current},
 			HealthMetrics: true,
 		})
 	}
 	for _, component := range m.components {
 		component.mu.RLock()
-		health := make(map[string]record.Record, len(component.health)+1)
+		health := make(map[HealthName]record.Record, len(component.health)+1)
 		for name, business := range component.health {
 			health[name] = business
 		}

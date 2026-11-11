@@ -23,7 +23,7 @@ type Component struct {
 	healthReporter diagnostic.Reporter
 	mu             sync.RWMutex
 	// health 保存业务按名称上报的权威记录，组件整体由这些记录派生。
-	health map[string]record.Record
+	health map[HealthName]record.Record
 	// lastQueueFull 由真实的队满拒收更新，以组件锁保护恢复窗口的唯一时间依据。
 	lastQueueFull time.Time
 }
