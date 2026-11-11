@@ -70,7 +70,7 @@ manager := syslogger.SafeNew(syslogger.Config{
 
 `DegradeOnQueueFull` 默认关闭，启用时需要 `StateEnabled`。`QueueFullRecoveryInterval` 指定连续无队满丢弃的恢复等待时间，零值为 30 秒；`New` 拒绝负值，`SafeNew` 回退默认值并报告配置纠正。
 
-各组件首次队满丢弃时可将整体降为 Degraded，再次队满丢弃重新计算恢复窗口；连续达到配置时长没有队满丢弃后，整体重新使用业务汇总。恢复由最后一次队满时刻决定，窗口内成功接收日志或停止产生日志都可以自然到达恢复时刻；队列积压继续按原有发送流程交付。队满不改写任何业务名称的状态和时间。
+各组件任一等级组首次队满丢弃时可将整体降为 Degraded，任一组再次队满丢弃重新计算恢复窗口；连续达到配置时长没有队满丢弃后，整体重新使用业务汇总。恢复由最后一次队满时刻决定，窗口内成功接收日志或停止产生日志都可以自然到达恢复时刻；四组独立并行交付各自积压。队满不改写任何业务名称的状态和时间。
 
 业务汇总的 Degraded 或 Unhealthy 持续优先，由对应名称的后续业务报告改变。业务汇总为 Healthy 或 Unknown 时，活动队满窗口使整体为 Degraded；窗口内业务全部恢复 Healthy 后，整体仍需等待窗口结束。没有任何业务报告时，窗口结束恢复 Unknown/0，日志能力恢复不代表业务健康。编码失败、关闭后调用及后台发送失败继续使用各自的诊断和 Counter；自动恢复窗口只由队满丢弃事件更新。
 
@@ -87,7 +87,7 @@ manager := syslogger.SafeNew(syslogger.Config{
 | `syslogger_component_log_rejected_total` | Counter | 模块接收前拒收的调用累计次数 |
 | `syslogger_component_log_send_failures_total` | Counter | 模块异步及同步发送失败的条目累计数 |
 
-两项健康指标带 `project、instance_id、component、name` 四个标签，每个业务名称及 overall 各输出一对状态和时间；日志 Counter 保持 `project、instance_id、component` 三个标签，每组件各输出一次。业务组件显式开启 `EnableHealthMetrics` 后输出健康指标，内置管理器在开启状态维护时输出整体状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
+两项健康指标带 `project、instance_id、component、name` 四个标签，每个业务名称及 overall 各输出一对状态和时间；日志 Counter 保持 `project、instance_id、component` 三个标签，汇总四组及同步调用，每组件各输出一次。业务组件显式开启 `EnableHealthMetrics` 后输出健康指标，内置管理器在开启状态维护时输出整体状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
 
 ```text
 syslogger_component_state{component="rpc",instance_id="api",name="connection",project="demo"} 1

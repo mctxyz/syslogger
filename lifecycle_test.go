@@ -128,10 +128,13 @@ func TestFinalFileIncludesLogCloseCounters(t *testing.T) {
 	if err := m.StartFile(); err != nil {
 		t.Fatal(err)
 	}
-	for n := 0; n < 1000; n++ {
-		c.Info(strings.Repeat("x", 32*1024), nil)
-		if rejected, _ := c.logs.Counts(); rejected != 0 {
-			break
+	for _, method := range []func(string, Fields){c.Debug, c.Info, c.Warning, c.Error} {
+		before, _ := c.logs.Counts()
+		for n := 0; n < 1000; n++ {
+			method(strings.Repeat("x", 32*1024), nil)
+			if rejected, _ := c.logs.Counts(); rejected > before {
+				break
+			}
 		}
 	}
 	waitUntil(t, func() bool { _, failed := c.logs.Counts(); return failed > 0 })

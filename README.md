@@ -3,7 +3,7 @@
 Go 1.23 本机结构化日志与组件健康状态库，配套 `mct-syslogger` 命令工具。日志按等级写入四个专用 journal 空间，指标使用 Prometheus 官方客户端。
 
 ```text
-日志 → 组件独立队列 → debug / info（含 notice）/ warning / error 及以上四个 journal 空间
+日志 → 每组件四组独立队列与并行发送 → debug / info（含 notice）/ warning / error 及以上四个 journal 空间
 状态 → 内存记录 → HTTP／.prom → Prometheus
 ```
 
@@ -73,7 +73,7 @@ mct-syslogger -p myapp -i main -s now -f
 ## 使用约定
 
 - **身份**：日志和指标共用 `project、instance_id、component`；空实例 ID 使用 `common`，同项目的并行实例应使用不同且跨重启稳定的 ID。
-- **日志交付**：默认异步入队，关键事件可用八级 `*Sync(ctx, message, fields)` 方法。写入成功仅表示交付本机 socket；默认专用入口失败不会自动转写系统 journal，失败条目不重放。
+- **日志交付**：默认异步入队，每组件四组各默认 512 条，独立容量、发送任务和连接，组内 FIFO、组间并发。容量配置按每组解释；关键事件可用八级 `*Sync(ctx, message, fields)` 方法。写入成功仅表示交付本机 socket；默认专用入口失败不会自动转写系统 journal，失败条目不重放。
 - **健康与指标**：状态维护、HTTP 和文件出口默认关闭。开启健康维护使用 `StateEnabled`；组件健康样本还需 `EnableHealthMetrics: true`。业务按组件集中声明 `HealthName` 类型的名称常量，通过无返回值的 `Healthy(name)`、`Degraded(name)`、`Unhealthy(name)` 上报，非法名称拒绝写入并由库独立诊断；健康指标使用 `name` 标签，SDK 自动生成 `name="overall"` 的组件整体。全部健康时整体 Healthy，全部不健康时整体 Unhealthy，其余组合 Degraded。关闭健康导出不影响按组件维护的两个日志 Counter，普通日志不自动改变业务健康结论。类型转换与接入示例见[健康与指标](docs/metrics.md)。
 - **名称目录**：`CatalogEnabled` 默认关闭，开启后按实际接收日志建立和更新目录；目录记录不代表进程存活或 journal 当前留存。
 

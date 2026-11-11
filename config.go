@@ -13,9 +13,9 @@ const (
 	defaultFlushInterval = 10 * time.Second
 	// 队满后的默认观察期以连续无丢弃时间判断恢复。
 	defaultQueueFullRecoveryInterval = 30 * time.Second
-	// defaultQueueCapacity 是未配置时使用的模块日志队列容量。
+	// defaultQueueCapacity 是未配置时每组件各等级组的日志队列容量。
 	defaultQueueCapacity = 512
-	// maximumQueueCapacity 限定单模块指针队列的容量范围。
+	// maximumQueueCapacity 限定每组指针队列的容量范围。
 	maximumQueueCapacity = 4096
 )
 
@@ -31,7 +31,8 @@ type Config struct {
 	CatalogEnabled bool
 	// SyslogSocketPath 指定传统 syslog Unix socket，由接入方保证隔离；空值按等级写入 Linux 的四个专用 journal 空间。
 	SyslogSocketPath string
-	// DefaultQueueCapacity 指定模块日志队列的默认容量，零值为 512，合法范围为 1～4096。
+	// DefaultQueueCapacity 指定每组件各等级组的默认容量，零值为每组 512，合法范围为每组 1～4096。
+	// 四组独占容量，默认每组件共 2048 个缓冲槽位。
 	DefaultQueueCapacity int
 	// StateEnabled 开启同步具名状态维护及组件整体汇总，零值关闭。
 	StateEnabled bool

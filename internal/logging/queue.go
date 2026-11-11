@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mctxyz/syslogger/internal/diagnostic"
 	"github.com/mctxyz/syslogger/internal/hourly"
 	"github.com/mctxyz/syslogger/internal/identity"
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 var (
@@ -20,17 +20,16 @@ var (
 	ErrQueueFull = errors.New("syslogger: 日志队列已满")
 )
 
-// Queue 持有模块独立 FIFO、固定发送任务、同步接收截止、失败计数及小时接收活动。
+// Queue 协调组件四组独立 FIFO 的接收截止、交付汇合、失败计数及小时接收活动。
 type Queue struct {
 	mu          sync.Mutex
-	entries     chan *Entry
+	groups      [journalwire.GroupCount]queueGroup
 	closing     bool
 	done        chan struct{}
 	ctx         context.Context
 	cancel      context.CancelFunc
 	syncSending sync.WaitGroup
-	transport   transport
-	reporter    diagnostic.Reporter
+	sending     sync.WaitGroup
 	identity    string
 	rejected    atomic.Uint64
 	failed      atomic.Uint64
@@ -45,31 +44,39 @@ type Queue struct {
 	abortErr      error
 }
 
-// New 按调用方已确定的正数容量建立模块有界指针队列，连接在后台处理首条事件时创建。
+// New 按调用方已确定的每组正数容量建立四组指针队列，各组连接在首条发送时创建。
 // activityWake 非 nil 时维护组件接收活动，首次活动只通知后台，调用线程不执行目录 I/O。
 func New(capacity int, path, project, instance, component string, activityWake chan<- struct{}) *Queue {
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &Queue{
-		entries: make(chan *Entry, capacity),
-		done:    make(chan struct{}),
-		ctx:     ctx,
-		cancel:  cancel,
-		transport: transport{
-			path:      path,
-			id:        identity.Instance{Project: project, InstanceID: instance},
-			component: component,
-		},
+		done:         make(chan struct{}),
+		ctx:          ctx,
+		cancel:       cancel,
 		identity:     fmt.Sprintf("project=%q instance_id=%q component=%q", project, instance, component),
 		activityWake: activityWake,
 	}
-	go q.run()
+	for group := range q.groups {
+		q.groups[group].entries = make(chan *Entry, capacity)
+		q.groups[group].transport = transport{
+			group:     journalwire.Group(group),
+			path:      path,
+			id:        identity.Instance{Project: project, InstanceID: instance},
+			component: component,
+		}
+	}
+	// 先登记全部发送任务，再启动 worker 和汇合，避免空组提前触发完成。
+	q.sending.Add(len(q.groups))
+	for group := range q.groups {
+		go q.groups[group].run(q)
+	}
+	go q.finish()
 	return q
 }
 
 // Reject 累计调用线程编码、上下文或生命周期检查阶段的拒收。
 func (q *Queue) Reject() { q.rejected.Add(1) }
 
-// Enqueue 立即接收或拒收，已有记录保持 FIFO。
+// Enqueue 按等级组立即接收或拒收，各组独占容量并保持组内 FIFO。
 func (q *Queue) Enqueue(entry *Entry) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -79,7 +86,7 @@ func (q *Queue) Enqueue(entry *Entry) error {
 	}
 	q.pending.Add(1)
 	select {
-	case q.entries <- entry:
+	case q.groups[journalwire.GroupForSeverity(uint8(entry.Severity))].entries <- entry:
 		q.recordActivity()
 		return nil
 	default:
@@ -100,19 +107,26 @@ func (q *Queue) Stop(ctx context.Context) {
 		return
 	}
 	q.closing = true
-	close(q.entries)
+	for group := range q.groups {
+		close(q.groups[group].entries)
+	}
 	q.mu.Unlock()
 	go func() {
 		select {
 		case <-q.done:
 		case <-ctx.Done():
 			q.mu.Lock()
-			if q.pending.Load() > 0 {
+			abort := q.pending.Load() > 0
+			if abort {
 				q.abortErr = ctx.Err()
 				q.cancel()
-				q.transport.close()
 			}
 			q.mu.Unlock()
+			if abort {
+				for group := range q.groups {
+					q.groups[group].transport.close()
+				}
+			}
 		}
 	}()
 }
@@ -131,27 +145,10 @@ func (q *Queue) Wait() error {
 	return nil
 }
 
-func (q *Queue) run() {
-	defer close(q.done)
-	defer q.cancel()
-	defer q.transport.close()
-	// 输入关闭后先等待已接收的同步调用，再发布完成；关闭期限仍可通过共享上下文中断它们。
-	defer q.syncSending.Wait()
-	for entry := range q.entries {
-		if q.ctx.Err() != nil {
-			q.abandoned++
-			q.pending.Add(-1)
-			continue
-		}
-		if err := q.transport.send(q.ctx, entry); err != nil {
-			q.mu.Lock()
-			q.failed.Add(1)
-			if q.closing {
-				q.closeFailures++
-			}
-			q.mu.Unlock()
-			q.reporter.Printf("%s: syslog 发送失败，当前条目已放弃: %v", q.identity, err)
-		}
-		q.pending.Add(-1)
-	}
+func (q *Queue) finish() {
+	q.sending.Wait()
+	// 四组退出意味着接收已统一截止，不会再登记同步发送；截止期限仍可中断在途调用。
+	q.syncSending.Wait()
+	q.cancel()
+	close(q.done)
 }

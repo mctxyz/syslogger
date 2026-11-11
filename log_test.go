@@ -90,7 +90,7 @@ func TestSendFailureDropsAndConnectionRecovers(t *testing.T) {
 		return failed == 1 && strings.Contains(capture.String(), `component="rpc"`)
 	})
 	receiver := unixReceiver(t, path)
-	c.Info("恢复后新日志", nil)
+	c.Error("恢复后新日志", nil)
 	if data := receive(t, receiver); !strings.Contains(string(data), "恢复后新日志") || strings.Contains(string(data), "失败即放弃") {
 		t.Fatalf("失败日志被补发: %s", data)
 	}
@@ -246,6 +246,51 @@ func TestLogRejectionDiagnostics(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLogRejectionDiagnosticsAreLimitedPerGroup(t *testing.T) {
+	capture := captureLogs(t)
+	m := testManager(t, testConfig(t))
+	c := testComponent(t, m, "rpc")
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 3; index++ {
+		c.Debug("关闭后", nil)
+		c.Info("关闭后", nil)
+		c.Notice("关闭后", nil)
+		c.Warning("关闭后", nil)
+		c.Error("关闭后", nil)
+		c.Emergency("关闭后", nil)
+	}
+	text := capture.String()
+	for _, group := range []string{"debug", "info", "warning", "error"} {
+		if count := strings.Count(text, fmt.Sprintf(`component="rpc" group=%q: 日志提交失败`, group)); count != 1 {
+			t.Fatalf("组 %s 的诊断被抑制或重复输出: %s", group, text)
+		}
+	}
+	if rejected, failed := c.logs.Counts(); rejected != 18 || failed != 0 {
+		t.Fatalf("诊断限流改变了组件计数: rejected=%d failed=%d", rejected, failed)
+	}
+}
+
+func TestSendFailureDiagnosticsAreLimitedPerGroup(t *testing.T) {
+	capture := captureLogs(t)
+	m := testManager(t, testConfig(t))
+	c := testComponent(t, m, "rpc")
+	for _, method := range []func(string, Fields){c.Debug, c.Info, c.Notice, c.Warning, c.Error, c.Critical, c.Alert, c.Emergency} {
+		method("独立测试 socket 发送失败", nil)
+	}
+	waitUntil(t, func() bool {
+		_, failed := c.logs.Counts()
+		return failed == 8 && strings.Count(capture.String(), "syslog 发送失败") == 4
+	})
+	text := capture.String()
+	for _, group := range []string{"debug", "info", "warning", "error"} {
+		if count := strings.Count(text, fmt.Sprintf(`component="rpc" group=%q: syslog 发送失败`, group)); count != 1 {
+			t.Fatalf("组 %s 的后台诊断被抑制或重复输出: %s", group, text)
+		}
 	}
 }
 

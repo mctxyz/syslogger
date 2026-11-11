@@ -48,7 +48,8 @@ func TestJournalSmallMessageAndLargeMemfd(t *testing.T) {
 			}
 			id := identity.Instance{Project: "p", InstanceID: "i"}
 			tr := &transport{
-				conns:         [journalwire.GroupCount]net.Conn{journalwire.ErrorGroup: conn},
+				conn:          conn,
+				group:         journalwire.ErrorGroup,
 				protocol:      journalNative,
 				id:            id,
 				component:     "rpc",
@@ -104,21 +105,13 @@ func TestJournalCloseInterruptsBackpressure(t *testing.T) {
 				t.Fatal(err)
 			}
 			id := identity.Instance{Project: "p", InstanceID: "i"}
-			ctx, cancel := context.WithCancel(context.Background())
-			q := &Queue{
-				entries: make(chan *Entry, 64),
-				done:    make(chan struct{}),
-				ctx:     ctx,
-				cancel:  cancel,
-				transport: transport{
-					conns:         [journalwire.GroupCount]net.Conn{journalwire.InfoGroup: conn},
-					protocol:      journalNative,
-					id:            id,
-					component:     "rpc",
-					journalHeader: journalwire.Header(id, "rpc"),
-				},
-			}
-			go q.run()
+			q := syncQueue(t, "", 64)
+			tr := &q.groups[journalwire.InfoGroup].transport
+			tr.mu.Lock()
+			tr.conn = conn
+			tr.protocol = journalNative
+			tr.journalHeader = journalwire.Header(id, "rpc")
+			tr.mu.Unlock()
 			entry := &Entry{Severity: Info, Body: bytes.Repeat([]byte("x"), size)}
 			for index := 0; index < 1000; index++ {
 				if errors.Is(q.Enqueue(entry), ErrQueueFull) {
@@ -149,13 +142,13 @@ func TestJournalWriteDeadline(t *testing.T) {
 			if err := conn.SetWriteBuffer(32 * 1024); err != nil {
 				t.Fatal(err)
 			}
-			tr := &transport{conns: [journalwire.GroupCount]net.Conn{journalwire.InfoGroup: conn}, protocol: journalNative}
+			tr := &transport{conn: conn, group: journalwire.InfoGroup, protocol: journalNative}
 			entry := &Entry{Severity: Info, Body: bytes.Repeat([]byte("x"), size)}
 			for index := 0; index < 100; index++ {
 				err := tr.send(context.Background(), entry)
 				if err != nil {
 					var timedOut net.Error
-					if !errors.As(err, &timedOut) || !timedOut.Timeout() || tr.conns[journalwire.InfoGroup] != nil {
+					if !errors.As(err, &timedOut) || !timedOut.Timeout() || tr.conn != nil {
 						t.Fatalf("背压未按写入截止失败并释放连接: %v", err)
 					}
 					return
@@ -168,20 +161,19 @@ func TestJournalWriteDeadline(t *testing.T) {
 
 func TestJournalGroupConnectionsAndFailureIsolation(t *testing.T) {
 	id := identity.Instance{Project: "project", InstanceID: "main"}
-	tr := &transport{
-		protocol:      journalNative,
-		id:            id,
-		component:     "rpc",
-		journalHeader: journalwire.Header(id, "rpc"),
-	}
-	t.Cleanup(tr.close)
+	q := syncQueue(t, "", 8)
 	var receivers [journalwire.GroupCount]*net.UnixConn
 	for group := journalwire.DebugGroup; group < journalwire.GroupCount; group++ {
-		tr.conns[group], receivers[group] = journalSocketPair(t)
+		tr := &q.groups[group].transport
+		tr.mu.Lock()
+		tr.conn, receivers[group] = journalSocketPair(t)
+		tr.protocol = journalNative
+		tr.journalHeader = journalwire.Header(id, "rpc")
+		tr.mu.Unlock()
 	}
 	for severity := Emergency; severity <= Debug; severity++ {
 		entry := &Entry{Severity: severity, Body: []byte(levelNames[severity])}
-		if err := tr.send(context.Background(), entry); err != nil {
+		if err := q.Enqueue(entry); err != nil {
 			t.Fatal(err)
 		}
 		group := journalwire.GroupForSeverity(uint8(severity))
@@ -190,26 +182,54 @@ func TestJournalGroupConnectionsAndFailureIsolation(t *testing.T) {
 		}
 		data := make([]byte, 4096)
 		n, err := receivers[group].Read(data)
-		if err != nil || !bytes.Equal(data[:n], journalwire.Message(tr.journalHeader, entry.Body, uint8(severity))) {
+		if err != nil || !bytes.Equal(data[:n], journalwire.Message(journalwire.Header(id, "rpc"), entry.Body, uint8(severity))) {
 			t.Fatalf("等级 %d 未保留正文与身份并投递到目标组: %v", severity, err)
 		}
 	}
-	if err := tr.conns[journalwire.DebugGroup].Close(); err != nil {
+	waitSyncCondition(t, func() bool { return q.pending.Load() == 0 })
+	debug := &q.groups[journalwire.DebugGroup].transport
+	debug.mu.Lock()
+	debugConn := debug.conn
+	debug.mu.Unlock()
+	if err := debugConn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.send(context.Background(), &Entry{Severity: Debug}); err == nil || tr.conns[journalwire.DebugGroup] != nil {
-		t.Fatalf("失败组未释放连接: %v", err)
+	if err := q.Enqueue(&Entry{Severity: Debug}); err != nil {
+		t.Fatal(err)
+	}
+	waitSyncCondition(t, func() bool {
+		_, failed := q.Counts()
+		return failed == 1 && q.pending.Load() == 0
+	})
+	debug.mu.Lock()
+	released := debug.conn == nil
+	debug.mu.Unlock()
+	if !released {
+		t.Fatal("失败组未释放连接")
 	}
 	for group := journalwire.InfoGroup; group < journalwire.GroupCount; group++ {
-		if tr.conns[group] == nil {
+		tr := &q.groups[group].transport
+		tr.mu.Lock()
+		connected := tr.conn != nil
+		tr.mu.Unlock()
+		if !connected {
 			t.Fatalf("错误关闭了 %s 空间连接", group.Name())
 		}
 	}
-	if err := tr.send(context.Background(), &Entry{Severity: Error}); err != nil {
+	if err := q.Enqueue(&Entry{Severity: Error}); err != nil {
 		t.Fatalf("其他组受单组失败影响: %v", err)
 	}
-	connections := tr.conns
-	tr.close()
+	var connections [journalwire.GroupCount]net.Conn
+	for group := range q.groups {
+		tr := &q.groups[group].transport
+		tr.mu.Lock()
+		connections[group] = tr.conn
+		tr.mu.Unlock()
+	}
+	q.Stop(context.Background())
+	if err := q.Wait(); err != nil {
+		t.Fatal(err)
+	}
 	for group, conn := range connections {
 		if conn != nil && conn.SetWriteDeadline(time.Now()) == nil {
 			t.Fatalf("关闭遗漏了组 %d 的连接", group)

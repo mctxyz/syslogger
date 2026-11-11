@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 func syncSocketPath(t *testing.T) string {
@@ -105,14 +107,16 @@ func TestSyncBypassesBlockedFIFO(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = blocked.Close() })
 	q := syncQueue(t, path, 1)
-	q.transport.mu.Lock()
-	q.transport.conns[0] = asyncConn
-	q.transport.protocol = syslogStream
-	q.transport.mu.Unlock()
+	tr := &q.groups[journalwire.ErrorGroup].transport
+	tr.mu.Lock()
+	tr.conn = asyncConn
+	tr.protocol = syslogStream
+	tr.mu.Unlock()
 	if err := q.Enqueue(&Entry{Body: bytes.Repeat([]byte("x"), 64*1024)}); err != nil {
 		t.Fatal(err)
 	}
-	waitSyncCondition(t, func() bool { return len(q.entries) == 0 })
+	entries := q.groups[journalwire.ErrorGroup].entries
+	waitSyncCondition(t, func() bool { return len(entries) == 0 })
 	if err := q.Enqueue(&Entry{Body: []byte("queued")}); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +136,7 @@ func TestSyncBypassesBlockedFIFO(t *testing.T) {
 	if err != nil || !strings.HasPrefix(line, "<10>") || !strings.HasSuffix(line, "immediate\n") {
 		t.Fatalf("同步独立连接或流式封装错误: %q, %v", line, err)
 	}
-	if q.pending.Load() != 2 || len(q.entries) != 1 {
+	if q.pending.Load() != 2 || len(entries) != 1 {
 		t.Fatal("同步发送消费或等待了普通积压")
 	}
 	if activity := q.TakeActivity(); activityCount(activity) != 3 {
@@ -209,11 +213,11 @@ func TestConcurrentSyncAdmissionAndClose(t *testing.T) {
 	var callers sync.WaitGroup
 	for index := 0; index < count; index++ {
 		callers.Add(1)
-		go func() {
+		go func(level Level) {
 			defer callers.Done()
 			<-start
-			_ = q.SendSync(context.Background(), &Entry{Body: []byte("racing")})
-		}()
+			_ = q.SendSync(context.Background(), &Entry{Severity: level, Body: []byte("racing")})
+		}(Level(index % 8))
 	}
 	callers.Add(1)
 	go func() {

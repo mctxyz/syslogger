@@ -10,18 +10,34 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
+// bufferedQueue 仅创建缓冲供接收侧断言使用，测试自行消费，各组不启动发送任务。
+func bufferedQueue(capacity int) *Queue {
+	q := &Queue{}
+	for group := range q.groups {
+		q.groups[group].entries = make(chan *Entry, capacity)
+	}
+	return q
+}
+
 func TestQueueFullPreservesFIFO(t *testing.T) {
-	q := &Queue{entries: make(chan *Entry, 2)}
-	a, b, c := &Entry{Body: []byte("a")}, &Entry{Body: []byte("b")}, &Entry{Body: []byte("c")}
-	if q.Enqueue(a) != nil || q.Enqueue(b) != nil || !errors.Is(q.Enqueue(c), ErrQueueFull) {
-		t.Fatal("容量拒收不符")
+	q := bufferedQueue(2)
+	for _, level := range []Level{Debug, Info, Warning, Error} {
+		a := &Entry{Severity: level, Body: []byte("a")}
+		b := &Entry{Severity: level, Body: []byte("b")}
+		c := &Entry{Severity: level, Body: []byte("c")}
+		if q.Enqueue(a) != nil || q.Enqueue(b) != nil || !errors.Is(q.Enqueue(c), ErrQueueFull) {
+			t.Fatalf("等级 %d 容量拒收不符", level)
+		}
+		entries := q.groups[journalwire.GroupForSeverity(uint8(level))].entries
+		if <-entries != a || <-entries != b {
+			t.Fatal("拒收覆盖了已有 FIFO 记录")
+		}
 	}
-	if <-q.entries != a || <-q.entries != b {
-		t.Fatal("拒收覆盖了已有 FIFO 记录")
-	}
-	if rejected, failed := q.Counts(); rejected != 1 || failed != 0 {
+	if rejected, failed := q.Counts(); rejected != 4 || failed != 0 {
 		t.Fatal("拒收与发送失败计数混淆")
 	}
 }
@@ -29,8 +45,10 @@ func TestQueueFullPreservesFIFO(t *testing.T) {
 func TestQueueCapacity(t *testing.T) {
 	for _, capacity := range []int{1, 64, 512, 4095, 4096} {
 		q := New(capacity, "", "demo", "common", "rpc", nil)
-		if cap(q.entries) != capacity {
-			t.Fatalf("容量 %d 实际为 %d", capacity, cap(q.entries))
+		for group := range q.groups {
+			if cap(q.groups[group].entries) != capacity {
+				t.Fatalf("组 %d 容量 %d 实际为 %d", group, capacity, cap(q.groups[group].entries))
+			}
 		}
 		q.Stop(context.Background())
 		if err := q.Wait(); err != nil {
@@ -73,7 +91,7 @@ func TestCloseInterruptsBackpressureAndReleasesQueue(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("关闭未中断 socket 写入")
 	}
-	if len(q.entries) != 0 || q.pending.Load() != 0 || q.abandoned == 0 {
+	if len(q.groups[journalwire.InfoGroup].entries) != 0 || q.pending.Load() != 0 || q.abandoned == 0 {
 		t.Fatal("关闭未释放积压记录")
 	}
 	if !errors.Is(q.Enqueue(entry), ErrClosed) {

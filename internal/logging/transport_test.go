@@ -16,7 +16,7 @@ func TestDefaultJournalNamespaceDoesNotFallBack(t *testing.T) {
 			// 预先取消会在实际连接前返回，检查默认目标时不接触真实日志服务。
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			conn, protocol, err := (&transport{}).connect(ctx, group)
+			conn, protocol, err := (&transport{group: group}).connect(ctx)
 			if conn != nil {
 				_ = conn.Close()
 				t.Fatal("取消的默认连接仍返回了连接")
@@ -43,7 +43,7 @@ func TestDefaultJournalNamespaceDoesNotFallBack(t *testing.T) {
 
 func TestExplicitSyslogFailureKeepsConfiguredPath(t *testing.T) {
 	path := syncSocketPath(t)
-	conn, protocol, err := (&transport{path: path}).connect(context.Background(), journalwire.DebugGroup)
+	conn, protocol, err := (&transport{path: path}).connect(context.Background())
 	if conn != nil {
 		_ = conn.Close()
 		t.Fatal("不存在的显式 socket 仍返回了连接")

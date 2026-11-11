@@ -119,7 +119,8 @@ type ComponentConfig struct {
 	// EnableHealthMetrics 显式导出该组件的具名及整体状态和时间，零值不输出健康样本。
 	// 只控制指标导出；日志 Counter、状态维护及队满降级继续遵守各自配置。
 	EnableHealthMetrics bool
-	// QueueCapacity 为 1～4096 时使用原值，其余值采用 Config.DefaultQueueCapacity。
+	// QueueCapacity 指定本组件各等级组的容量，为 1～4096 时使用原值，其余值采用 Config.DefaultQueueCapacity。
+	// 四组各自预留该数量的缓冲槽位，总容量为此值的四倍。
 	QueueCapacity int
 }
 

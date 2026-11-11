@@ -85,9 +85,14 @@ func TestConfiguredDefaultQueueCapacity(t *testing.T) {
 					}
 					// 直接核对实际 channel 容量，生产接口保持现有职责。
 					queue := reflect.ValueOf(component.logs).Elem()
-					entries := queue.FieldByName("entries")
-					if got := entries.Cap(); got != want {
-						t.Fatalf("模块容量不符: requested=%d got=%d want=%d", requested, got, want)
+					groups := queue.FieldByName("groups")
+					if groups.Len() != 4 {
+						t.Fatalf("模块队列分组数量不符: %d", groups.Len())
+					}
+					for group := 0; group < groups.Len(); group++ {
+						if got := groups.Index(group).FieldByName("entries").Cap(); got != want {
+							t.Fatalf("组 %d 容量不符: requested=%d got=%d want=%d", group, requested, got, want)
+						}
 					}
 				}
 				if invalid {

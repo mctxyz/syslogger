@@ -7,18 +7,19 @@ import (
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
 	"github.com/mctxyz/syslogger/internal/identity"
+	"github.com/mctxyz/syslogger/internal/journalwire"
 	"github.com/mctxyz/syslogger/internal/logging"
 	"github.com/mctxyz/syslogger/internal/record"
 )
 
-// Component 绑定固定模块身份、独立日志队列和同步健康记录，可并发使用。
+// Component 绑定固定模块身份、四组独立日志队列和同步健康记录，可并发使用。
 type Component struct {
 	manager             *Manager
 	name                string
 	description         string
 	enableHealthMetrics bool
 	logs                *logging.Queue
-	logReporter         diagnostic.Reporter
+	logReporters        [journalwire.GroupCount]diagnostic.Reporter
 	// healthReporter 单独限流非法健康名称的诊断，保留日志交付诊断的输出机会。
 	healthReporter diagnostic.Reporter
 	mu             sync.RWMutex
@@ -64,12 +65,14 @@ func (c *Component) log(level logging.Level, message string, fields Fields) {
 		m.mu.RUnlock()
 	}
 	if err != nil {
-		// 标准日志的输出由接入方配置，I/O 在生命周期锁外执行并按模块限流。
-		c.logReporter.Printf(
-			"project=%q instance_id=%q component=%q: 日志提交失败，本条日志已拒收: %v",
+		// 标准日志的输出由接入方配置，I/O 在生命周期锁外执行并按组件等级组限流。
+		group := journalwire.GroupForSeverity(uint8(level))
+		c.logReporters[group].Printf(
+			"project=%q instance_id=%q component=%q group=%q: 日志提交失败，本条日志已拒收: %v",
 			m.id.Project,
 			m.id.InstanceID,
 			c.name,
+			group.Name(),
 			err,
 		)
 	}

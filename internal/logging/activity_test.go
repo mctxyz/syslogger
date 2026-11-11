@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mctxyz/syslogger/internal/journalwire"
 )
 
 func activityCount(activity Activity) uint64 {
@@ -19,7 +21,8 @@ func activityCount(activity Activity) uint64 {
 
 func TestActivityCountsOnlyAcceptedEntriesAndRestoresWindow(t *testing.T) {
 	wake := make(chan struct{}, 1)
-	q := &Queue{entries: make(chan *Entry, 2), activityWake: wake}
+	q := bufferedQueue(2)
+	q.activityWake = wake
 	entry := &Entry{}
 	if q.Enqueue(entry) != nil || q.Enqueue(entry) != nil || !errors.Is(q.Enqueue(entry), ErrQueueFull) {
 		t.Fatal("未形成预期入队与拒收")
@@ -29,7 +32,7 @@ func TestActivityCountsOnlyAcceptedEntriesAndRestoresWindow(t *testing.T) {
 		t.Fatalf("入队统计或首次通知不符: %+v", first)
 	}
 	<-wake
-	<-q.entries
+	<-q.groups[journalwire.ErrorGroup].entries
 	if err := q.Enqueue(entry); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +54,8 @@ func TestActivityCountsOnlyAcceptedEntriesAndRestoresWindow(t *testing.T) {
 }
 
 func TestActivityOverflowStillHasActivity(t *testing.T) {
-	q := &Queue{entries: make(chan *Entry, 1), activityWake: make(chan struct{}, 1)}
+	q := bufferedQueue(1)
+	q.activityWake = make(chan struct{}, 1)
 	q.logCounts.Add(time.Now(), ^uint64(0))
 	if err := q.Enqueue(&Entry{}); err != nil {
 		t.Fatal(err)
@@ -63,18 +67,19 @@ func TestActivityOverflowStillHasActivity(t *testing.T) {
 }
 
 func TestActivityConcurrentEnqueueAndSnapshots(t *testing.T) {
-	q := &Queue{entries: make(chan *Entry, 1000), activityWake: make(chan struct{}, 1)}
+	q := bufferedQueue(1000)
+	q.activityWake = make(chan struct{}, 1)
 	var workers sync.WaitGroup
 	for index := 0; index < 10; index++ {
 		workers.Add(1)
-		go func() {
+		go func(level Level) {
 			defer workers.Done()
 			for count := 0; count < 100; count++ {
-				if err := q.Enqueue(&Entry{}); err != nil {
+				if err := q.Enqueue(&Entry{Severity: level}); err != nil {
 					t.Error(err)
 				}
 			}
-		}()
+		}(Level(index % 8))
 	}
 	done := make(chan struct{})
 	go func() {
