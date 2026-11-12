@@ -17,6 +17,10 @@ import (
 // 本机 IPC 的单次连接和写入均使用有限等待，同步交付还受调用上下文约束。
 const sendTimeout = time.Second
 
+// maxRetainedSendBuffer 覆盖常规消息的暂存空间，512 KiB 等大消息发送后释放暂存分配。
+// 此值只限制每组长期保留的缓冲容量，消息仍按原数据报或 memfd 路径完整发送。
+const maxRetainedSendBuffer = 64 * 1024
+
 type wireProtocol uint8
 
 const (
@@ -37,12 +41,14 @@ type transport struct {
 	closed        bool
 }
 
-func (t *transport) send(ctx context.Context, entry *Entry) error {
+// send 串行使用调用方独占的暂存缓冲，写入完全返回后再交还可复用空间。
+// close 仅操作连接，取消写入时不会访问或释放该缓冲。
+func (t *transport) send(ctx context.Context, entry *Entry, buffer []byte) ([]byte, error) {
 	t.mu.Lock()
 	conn, protocol, header, closed := t.conn, t.protocol, t.journalHeader, t.closed
 	t.mu.Unlock()
 	if closed {
-		return context.Canceled
+		return buffer, context.Canceled
 	}
 	if conn == nil {
 		dialCtx, cancel := context.WithTimeout(ctx, sendTimeout)
@@ -50,7 +56,7 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 		var err error
 		conn, protocol, err = t.connect(dialCtx)
 		if err != nil {
-			return err
+			return buffer, err
 		}
 		if protocol == journalNative {
 			header = journalwire.Header(t.id, t.component)
@@ -59,18 +65,18 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 		if t.closed {
 			t.mu.Unlock()
 			_ = conn.Close()
-			return context.Canceled
+			return buffer, context.Canceled
 		}
 		t.conn, t.protocol, t.journalHeader = conn, protocol, header
 		t.mu.Unlock()
 	}
-	var data []byte
+	data := buffer[:0]
 	if protocol == journalNative {
-		data = journalwire.Message(header, entry.Body, uint8(entry.Severity))
+		data = journalwire.AppendMessage(data, header, entry.Body, uint8(entry.Severity))
 	} else {
 		// 传统 syslog 仅规范化协议头，JSON 中的项目原文保持完整。
 		tag := identity.SyslogTag(t.id.Project)
-		data = []byte(fmt.Sprintf("<%d>%s %s[%d]: ", 8+entry.Severity, time.Now().Format(time.Stamp), tag, os.Getpid()))
+		data = fmt.Appendf(data, "<%d>%s %s[%d]: ", 8+entry.Severity, time.Now().Format(time.Stamp), tag, os.Getpid())
 		data = append(data, entry.Body...)
 		if protocol == syslogStream {
 			data = append(data, '\n')
@@ -96,7 +102,10 @@ func (t *transport) send(ctx context.Context, entry *Entry) error {
 		t.mu.Unlock()
 		_ = conn.Close()
 	}
-	return err
+	if cap(data) > maxRetainedSendBuffer {
+		return nil, err
+	}
+	return data, err
 }
 
 // connect 连接本组原生 journal；显式路径由各组独立连接同一传统 syslog 入口。

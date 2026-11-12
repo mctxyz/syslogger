@@ -56,8 +56,12 @@ func TestJournalSmallMessageAndLargeMemfd(t *testing.T) {
 				journalHeader: journalwire.Header(id, "rpc"),
 			}
 			entry := &Entry{Severity: Error, Body: []byte(strings.Repeat("x", size))}
-			if err := tr.send(context.Background(), entry); err != nil {
+			buffer, err := tr.send(context.Background(), entry, nil)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if size > maxRetainedSendBuffer && buffer != nil || size < maxRetainedSendBuffer && len(buffer) == 0 {
+				t.Fatal("正常发送后的大消息缓冲被长期保留，或小消息未交还复用")
 			}
 			_ = receiver.SetReadDeadline(time.Now().Add(5 * time.Second))
 			data := make([]byte, 64*1024)
@@ -67,7 +71,7 @@ func TestJournalSmallMessageAndLargeMemfd(t *testing.T) {
 				t.Fatalf("接收原生消息失败: %d, %v", flags, err)
 			}
 			if size < 1024 {
-				if controlN != 0 || !bytes.Equal(data[:n], journalwire.Message(tr.journalHeader, entry.Body, uint8(entry.Severity))) {
+				if controlN != 0 || !bytes.Equal(data[:n], journalwire.AppendMessage(nil, tr.journalHeader, entry.Body, uint8(entry.Severity))) {
 					t.Fatal("小消息未通过单次原生数据报完整交付")
 				}
 				return
@@ -86,12 +90,21 @@ func TestJournalSmallMessageAndLargeMemfd(t *testing.T) {
 				t.Fatal(err)
 			}
 			actual, err := io.ReadAll(file)
-			if err != nil || !bytes.Equal(actual, journalwire.Message(tr.journalHeader, entry.Body, uint8(entry.Severity))) {
+			if err != nil || !bytes.Equal(actual, journalwire.AppendMessage(nil, tr.journalHeader, entry.Body, uint8(entry.Severity))) {
 				t.Fatalf("匿名文件中的大消息不完整: %v", err)
 			}
 			seals, err := unix.FcntlInt(file.Fd(), unix.F_GET_SEALS, 0)
 			if err != nil || seals&unix.F_SEAL_WRITE == 0 {
 				t.Fatalf("消息文件未密封: %d, %v", seals, err)
+			}
+			entry = &Entry{Severity: Critical, Body: []byte("after large message")}
+			buffer, err = tr.send(context.Background(), entry, buffer)
+			if err != nil || len(buffer) == 0 || cap(buffer) > maxRetainedSendBuffer {
+				t.Fatalf("大消息之后未恢复常规缓冲: %v", err)
+			}
+			n, err = receiver.Read(data)
+			if err != nil || !bytes.Equal(data[:n], buffer) {
+				t.Fatalf("大消息之后的普通数据报被污染: %v", err)
 			}
 		})
 	}
@@ -144,8 +157,10 @@ func TestJournalWriteDeadline(t *testing.T) {
 			}
 			tr := &transport{conn: conn, group: journalwire.InfoGroup, protocol: journalNative}
 			entry := &Entry{Severity: Info, Body: bytes.Repeat([]byte("x"), size)}
+			var buffer []byte
 			for index := 0; index < 100; index++ {
-				err := tr.send(context.Background(), entry)
+				var err error
+				buffer, err = tr.send(context.Background(), entry, buffer)
 				if err != nil {
 					var timedOut net.Error
 					if !errors.As(err, &timedOut) || !timedOut.Timeout() || tr.conn != nil {
@@ -182,7 +197,7 @@ func TestJournalGroupConnectionsAndFailureIsolation(t *testing.T) {
 		}
 		data := make([]byte, 4096)
 		n, err := receivers[group].Read(data)
-		if err != nil || !bytes.Equal(data[:n], journalwire.Message(journalwire.Header(id, "rpc"), entry.Body, uint8(severity))) {
+		if err != nil || !bytes.Equal(data[:n], journalwire.AppendMessage(nil, journalwire.Header(id, "rpc"), entry.Body, uint8(severity))) {
 			t.Fatalf("等级 %d 未保留正文与身份并投递到目标组: %v", severity, err)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
+	"slices"
 	"strconv"
 
 	"github.com/mctxyz/syslogger/internal/identity"
@@ -37,10 +38,11 @@ func Header(id identity.Instance, component string) []byte {
 	return data
 }
 
-// Message 保留原 JSON 字节，并使用独立缓冲区，保证固定头可在后续消息中继续复用。
-func Message(header, body []byte, severity uint8) []byte {
-	data := make([]byte, len(header), len(header)+len(body)+64)
-	copy(data, header)
+// AppendMessage 向调用方独占的缓冲追加原生消息，保留原 JSON 字节及既有前缀。
+// dst 的可写空间应与 header、body 独立，发送完成后调用方可复用返回的缓冲。
+func AppendMessage(dst, header, body []byte, severity uint8) []byte {
+	data := slices.Grow(dst, len(header)+len(body)+64)
+	data = append(data, header...)
 	data = appendField(data, "PRIORITY", []byte(strconv.Itoa(int(severity))))
 	return appendField(data, "MESSAGE", body)
 }

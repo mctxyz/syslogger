@@ -23,6 +23,10 @@ rpc.Healthy(rpcConnection)
 
 正文实际为单行 JSON，时间为 UTC RFC3339Nano，等级为小写名称。顶层 error 字段使用 Error() 文本，nil 或空字段省略 fields。编码在调用线程完成，调用期间字段由业务保证无并发修改；返回后修改原字段不会改变已编码日志。出口使用 LOG_USER facility 和真实 severity，`SYSLOG_IDENTIFIER`／syslog tag 来自项目名；项目 tag 中的空白和控制字符规范化为下划线，JSON 身份保留原文。
 
+日志编码复用项目锁定的 `go-json v0.12.0`，保留默认 HTML 转义、UTF-8 规范化及 map 键排序，业务字段可使用标准 `json.Marshaler`、`encoding.TextMarshaler`。该版本还支持 `go-json/jsontext` 的 `MarshalJSONTo`，按上游规则优先于 `MarshalJSON` 调用；极深嵌套、指针 map 键及非法自定义 JSON 的细节见[上游兼容说明](https://github.com/goccy/go-json/tree/v0.12.0#features)。使用这些扩展或边界类型的接入方应按锁定编码器的规则验收。
+
+编码器生成的错误使用 `go-json` 的具体类型；同步方法的调用方使用 `errors.As` 时，应匹配该包对应的错误类型。自定义 `MarshalJSON` 返回的业务错误仍可通过 `errors.Is` 沿原因链识别。
+
 ## 日志入口与协议
 
 Linux 默认按 severity 选择 `/run/systemd/journal.<namespace>/socket` 的原生 journal 入口：debug 使用 `mct-syslogger-debug`，info/notice 使用 `mct-syslogger-info`，warning 使用 `mct-syslogger-warning`，error/critical/alert/emergency 使用 `mct-syslogger-error`。每条只写一个空间，保留真实 `PRIORITY`、`SYSLOGGER_PROJECT`、`SYSLOGGER_INSTANCE_ID`、`SYSLOGGER_COMPONENT` 及完整 JSON `MESSAGE`。身份中的换行使用原生二进制字段编码，大消息在数据报超限时通过密封的匿名内存文件传递。SDK 拥有连接，连接和写入各使用一秒等待上限；普通异步调用线程只编码和入队。
@@ -43,6 +47,8 @@ Linux 默认按 severity 选择 `/run/systemd/journal.<namespace>/socket` 的原
 | error | Error、Critical、Alert、Emergency |
 
 四组并发发送，某组连接或写入等待只占用自己的发送任务。各组独占缓冲，组内保持发送尝试 FIFO，组间及 journald 接收与落盘不承诺全局顺序。每组件另有一个轻量收尾任务，等待四组及已接收同步调用全部完成后发布组件完成信号。
+
+每组发送任务还独占协议暂存缓冲，写入完成后复用，退出后释放。单组最多保留 64 KiB 暂存容量；更大的消息仍完整发送，发送完成或失败后释放该大块暂存分配。正文、固定协议头和同步调用均与各组暂存空间独立，这个留存上限不改变日志大小或队列容量。
 
 `Config.DefaultQueueCapacity` 为管理器设置每组件各组的默认容量，零值为**每组 512**，每组件默认共 2048 个缓冲槽位；合法范围为每组 1～4096，`New` 和 `SafeNew` 均可配置。`New` 拒绝非法默认容量，`SafeNew` 回退每组 512 并记录配置纠正。
 

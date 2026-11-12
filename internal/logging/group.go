@@ -12,6 +12,8 @@ type queueGroup struct {
 func (g *queueGroup) run(q *Queue) {
 	defer q.sending.Done()
 	defer g.transport.close()
+	// 缓冲仅在本组发送任务中复用，退出后随任务释放，不与同步调用或其他组共享。
+	var buffer []byte
 	for entry := range g.entries {
 		if q.ctx.Err() != nil {
 			q.mu.Lock()
@@ -20,7 +22,9 @@ func (g *queueGroup) run(q *Queue) {
 			q.pending.Add(-1)
 			continue
 		}
-		if err := g.transport.send(q.ctx, entry); err != nil {
+		var err error
+		buffer, err = g.transport.send(q.ctx, entry, buffer)
+		if err != nil {
 			q.mu.Lock()
 			q.failed.Add(1)
 			if q.closing {

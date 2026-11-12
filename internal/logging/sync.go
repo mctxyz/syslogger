@@ -44,7 +44,7 @@ func (q *Queue) SendSync(ctx context.Context, entry *Entry) error {
 	stopWrite := context.AfterFunc(sendCtx, tr.close)
 	defer stopWrite()
 	defer tr.close()
-	err := tr.send(sendCtx, entry)
+	_, err := tr.send(sendCtx, entry, nil)
 	if err != nil && sendCtx.Err() != nil {
 		err = sendCtx.Err()
 	}

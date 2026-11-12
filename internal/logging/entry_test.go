@@ -46,3 +46,24 @@ func BenchmarkEncode(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkEncodeFields(b *testing.B) {
+	for _, size := range []int{512, 4096} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			message := strings.Repeat("x", size)
+			id := identity.Instance{Project: "bench", InstanceID: "common"}
+			fields := map[string]any{
+				"error":   errors.New("请求失败"),
+				"attempt": 3,
+				"nested":  map[string]any{"height": 123, "ready": true},
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for n := 0; n < b.N; n++ {
+				if _, err := Encode(id, "rpc", Info, message, fields, time.Now()); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

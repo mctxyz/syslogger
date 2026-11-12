@@ -51,7 +51,7 @@ func TestIdentityFieldsAndMessagePreservation(t *testing.T) {
 	before := bytes.Clone(header)
 	body := []byte(`{"message":"test","fields":{"large":18446744073709551615}}`)
 	for severity := uint8(0); severity < 8; severity++ {
-		fields := readFields(t, Message(header, body, severity))
+		fields := readFields(t, AppendMessage(nil, header, body, severity))
 		if fields[ProjectField] != id.Project || fields[InstanceField] != id.InstanceID || fields[ComponentField] != "rpc\n读取" {
 			t.Fatalf("原生身份原文被改变: %+v", fields)
 		}
@@ -69,8 +69,31 @@ func TestIdentityFieldsAndMessagePreservation(t *testing.T) {
 
 func TestBinaryMessageField(t *testing.T) {
 	body := []byte("line one\nline two\x00")
-	fields := readFields(t, Message(nil, body, 6))
+	fields := readFields(t, AppendMessage(nil, nil, body, 6))
 	if fields["MESSAGE"] != string(body) {
 		t.Fatal("二进制消息值没有保持完整")
+	}
+}
+
+func TestAppendMessageReusesBufferAndPreservesPrefix(t *testing.T) {
+	header := Header(identity.Instance{Project: "项目\nA", InstanceID: "common"}, "rpc")
+	headerBefore := bytes.Clone(header)
+	prefix := []byte("prefix:")
+	buffer := make([]byte, len(prefix), 8192)
+	copy(buffer, prefix)
+	start := &buffer[0]
+	for _, body := range [][]byte{bytes.Repeat([]byte("x"), 4096), []byte("short\n\x00"), []byte("last")} {
+		before := bytes.Clone(body)
+		buffer = AppendMessage(buffer[:len(prefix)], header, body, 4)
+		if &buffer[0] != start || !bytes.Equal(buffer[:len(prefix)], prefix) {
+			t.Fatal("追加消息没有复用空间或覆盖了前缀")
+		}
+		fields := readFields(t, buffer[len(prefix):])
+		if fields["MESSAGE"] != string(body) || fields["PRIORITY"] != "4" {
+			t.Fatal("长消息之后的短消息包含残留或编码错误")
+		}
+		if !bytes.Equal(body, before) || !bytes.Equal(header, headerBefore) {
+			t.Fatal("追加消息覆盖了输入正文或固定头")
+		}
 	}
 }

@@ -2,11 +2,11 @@
 package logging
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
 
+	json "github.com/goccy/go-json"
 	"github.com/mctxyz/syslogger/internal/identity"
 )
 
