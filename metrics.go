@@ -3,6 +3,7 @@ package syslogger
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/mctxyz/syslogger/internal/diagnostic"
@@ -120,6 +121,22 @@ func (m *Manager) metricsBytes() ([]byte, error) {
 	var data bytes.Buffer
 	if err == nil {
 		for _, family := range families {
+			switch family.GetName() {
+			case metricDefinitions[0].name, metricDefinitions[1].name:
+				// 健康文本按名称、组件、实例、项目展示；克隆切片以保护 Collector 复用的标签数组。
+				for _, metric := range family.Metric {
+					for index, label := range metric.Label {
+						if label.GetName() != "name" {
+							continue
+						}
+						labels := slices.Clone(metric.Label)
+						copy(labels[1:index+1], labels[:index])
+						labels[0] = label
+						metric.Label = labels
+						break
+					}
+				}
+			}
 			if _, err = expfmt.MetricFamilyToText(&data, family); err != nil {
 				break
 			}

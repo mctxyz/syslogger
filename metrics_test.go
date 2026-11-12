@@ -184,9 +184,10 @@ func TestSharedRegistryExportsBusinessMetrics(t *testing.T) {
 	external := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 	response = httptest.NewRecorder()
 	external.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), file) {
+	if response.Code != http.StatusOK {
 		t.Fatal("外部 promhttp 未同时导出内置与业务指标")
 	}
+	assertMetricTextsEquivalent(t, response.Body.String(), string(file))
 	if _, err := m.Register(ComponentConfig{Name: "late", QueueCapacity: 1}); err == nil {
 		t.Fatal("导出开始后仍允许增加业务组件")
 	}
