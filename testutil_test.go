@@ -7,8 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"reflect"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -170,42 +168,6 @@ func hasMetricSample(t testing.TB, text, name string, labels map[string]string, 
 		t.Fatalf("指标 %s 不是 Gauge 或 Counter", name)
 	}
 	return false
-}
-
-// assertMetricTextsEquivalent 统一标签顺序后比较完整指标，允许不同出口采用各自的展示顺序。
-func assertMetricTextsEquivalent(t testing.TB, left, right string) {
-	t.Helper()
-	var leftParser, rightParser expfmt.TextParser
-	a, err := leftParser.TextToMetricFamilies(strings.NewReader(left))
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := rightParser.TextToMetricFamilies(strings.NewReader(right))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(a) != len(b) {
-		t.Fatalf("指标族数量不一致: got=%d want=%d", len(a), len(b))
-	}
-	for name, family := range a {
-		other, exists := b[name]
-		if !exists {
-			t.Fatalf("指标族缺失: %s", name)
-		}
-		for _, metric := range family.Metric {
-			sort.Slice(metric.Label, func(i, j int) bool {
-				return metric.Label[i].GetName() < metric.Label[j].GetName()
-			})
-		}
-		for _, metric := range other.Metric {
-			sort.Slice(metric.Label, func(i, j int) bool {
-				return metric.Label[i].GetName() < metric.Label[j].GetName()
-			})
-		}
-		if !reflect.DeepEqual(family, other) {
-			t.Fatalf("指标族的标签集合、数值或元数据不一致: %s", name)
-		}
-	}
 }
 
 func socketDirectory(t testing.TB) string {

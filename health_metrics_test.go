@@ -312,7 +312,9 @@ func TestDynamicNamedHealthAcrossOutlets(t *testing.T) {
 	}
 	texts = append(texts, string(readSnapshot(t, cfg.File.OutputPath)))
 	for _, text := range texts {
-		assertMetricTextsEquivalent(t, text, texts[0])
+		if text != texts[0] {
+			t.Fatal("HTTP、共享 Registry、文件或最终快照的具名状态不一致")
+		}
 		labels := map[string]string{"project": cfg.Project, "instance_id": cfg.InstanceID, "component": a.name}
 		assertComponentMetricSet(t, text, labels, map[string]float64{
 			"syslogger_component_log_rejected_total":      2,

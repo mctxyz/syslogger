@@ -34,7 +34,7 @@ func ExampleComponent_Unhealthy() {
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
-	fmt.Println(strings.Contains(response.Body.String(), `syslogger_component_state{name="overall",component="rpc",instance_id="common",project="demo"} 3`))
+	fmt.Println(strings.Contains(response.Body.String(), `syslogger_component_state{component="rpc",instance_id="common",name="overall",project="demo"} 3`))
 	// Output: true
 }
 
@@ -61,7 +61,7 @@ func ExampleSafeNew() {
 	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
 	containsState := strings.Contains(
 		response.Body.String(),
-		`syslogger_component_state{name="overall",component="rpc",instance_id="common",project="demo"} 1`,
+		`syslogger_component_state{component="rpc",instance_id="common",name="overall",project="demo"} 1`,
 	)
 	fmt.Println(containsState)
 	// Output: true

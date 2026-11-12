@@ -89,12 +89,10 @@ manager := syslogger.SafeNew(syslogger.Config{
 
 两项健康指标带 `project、instance_id、component、name` 四个标签，每个业务名称及 overall 各输出一对状态和时间；日志 Counter 保持 `project、instance_id、component` 三个标签，汇总四组及同步调用，每组件各输出一次。业务组件显式开启 `EnableHealthMetrics` 后输出健康指标，内置管理器在开启状态维护时输出整体状态和时间。两个 Counter 从 0 累计，健康恢复不清零，管理器重建后归零；关闭期限到达时尚未尝试的积压通过 Close 错误反馈。
 
-SDK 的 HTTP 和 `.prom` 文本将健康指标按 `name、component、instance_id、project` 展示，从具体状态逐层对应到组件、实例和项目。标签集合、数值及时间序列身份保持不变；日志 Counter 和业务指标沿用官方输出顺序。直接通过 `Registry()` 接入的 `promhttp`、Prometheus 或可视化工具按各自规则展示标签。
-
 ```text
-syslogger_component_state{name="connection",component="rpc",instance_id="api",project="demo"} 1
-syslogger_component_state{name="storage",component="rpc",instance_id="api",project="demo"} 3
-syslogger_component_state{name="overall",component="rpc",instance_id="api",project="demo"} 2
+syslogger_component_state{component="rpc",instance_id="api",name="connection",project="demo"} 1
+syslogger_component_state{component="rpc",instance_id="api",name="storage",project="demo"} 3
+syslogger_component_state{component="rpc",instance_id="api",name="overall",project="demo"} 2
 ```
 
 官方文本编码为状态指标族输出一条共享的 HELP 注释，所有组件的状态样本共用数值说明；HTTP 与 `.prom` 文件均包含该注释：
