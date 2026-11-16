@@ -41,6 +41,8 @@ type Manager struct {
 	registry             *prometheus.Registry
 	metricDescs          [len(metricDefinitions)]*prometheus.Desc
 	frozen               bool
+	// gauges 仅登记成功注册的组件数量指标，最终快照后统一注销。
+	gauges []*prometheus.GaugeVec
 	// closedAt 同时表达首次关闭截止及健康状态的固定评估时刻。
 	closedAt  time.Time
 	starters  sync.WaitGroup

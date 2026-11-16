@@ -35,7 +35,7 @@ type componentSnapshot struct {
 }
 
 // Registry 返回实际使用的注册表，业务可向其中注册官方 Collector 或交给 promhttp 使用。
-// 业务 Collector 的更新和关闭由调用方管理，管理器关闭时只注销自身 Collector。
+// 直接注册的业务 Collector 由调用方管理，管理器关闭时注销自身 Collector 及组件注册的 Gauge。
 func (m *Manager) Registry() *prometheus.Registry {
 	return m.registry
 }

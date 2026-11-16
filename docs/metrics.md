@@ -2,6 +2,8 @@
 
 业务按自定义名称主动报告各部分的健康状态，SDK 自动汇总所属组件的整体健康。日志发送和健康报告分别调用，HTTP、指标文件和外部 Registry 复用 Prometheus 官方 Collector。
 
+组件还可通过 `RegisterGauge` 注册业务数量指标，运行时同步报告当前值；数量独立于健康状态，复用同一 Registry 及指标出口。
+
 ## 状态维护与逐组件导出
 
 `Healthy(name HealthName)`、`Degraded(name HealthName)`、`Unhealthy(name HealthName)` 无返回值，同步提交该名称的业务状态及库采集的时间。`HealthName` 是以 string 为底层的定义类型，业务按组件集中声明该类型的常量，便于复用名称和查看组件有哪些状态。名称在所属组件内唯一，不同组件可以使用相同名称；同名报告更新原记录，不同名称独立维护。名称保留合法 UTF-8 原文、区分大小写，必须包含非空白内容；`overall` 是 SDK 的整体输出保留名。非法名称拒绝写入且不修改任何记录，通过标准日志独立诊断，有效组件的连续名称错误按组件每秒最多输出一次，不占用日志交付诊断的限流窗口。合法名称在状态维护关闭、无效组件句柄或管理器关闭截止后安全忽略。
@@ -101,6 +103,49 @@ syslogger_component_state{component="rpc",instance_id="api",name="overall",proje
 # HELP syslogger_component_state 具名业务及组件整体的健康状态：0=Unknown（尚无健康报告），1=Healthy（正常），2=Degraded（部分能力受损），3=Unhealthy（无法正常履行职责）。
 # TYPE syslogger_component_state gauge
 ```
+
+## 组件数量指标
+
+业务在指标出口启动、取得 Handler 或首次采集之前，通过组件注册多个 Gauge。`GaugeConfig.Metric` 是所测数量的指标后缀，SDK 自动添加 `syslogger_component_`；`Name` 是该指标下的逻辑对象，`Help` 描述数量，`LabelNames` 声明可选业务分类：
+
+```go
+pending, err := worker.RegisterGauge(syslogger.GaugeConfig{
+    Metric: "queue_length",
+    Name: "pending",
+    Help: "队列当前任务数",
+    LabelNames: []string{"priority"},
+})
+if err != nil {
+    return err
+}
+if err := pending.Set(42, syslogger.Labels{"priority": "high"}); err != nil {
+    return err
+}
+```
+
+`worker` 是已注册的组件。输出沿用官方指标编码和标签顺序，例如：
+
+```text
+syslogger_component_queue_length{component="worker",instance_id="main",name="pending",priority="high",project="demo"} 42
+```
+
+### 定义与标签
+
+- `project`、`instance_id` 和 `component` 来自所属组件身份，`name` 来自注册时的 `GaugeConfig.Name`，四项都由 SDK 固定。业务只传指标后缀，完整前缀输入会被拒绝。
+- 同一个 Metric 下可注册不同 Name，同一个 Name 也可用于不同 Metric；Name 保留合法 UTF-8 原文且须包含非空白内容。健康中的 `overall` 保留规则仅作用于健康 API，数量对象可自行使用该名称。
+- 同一完整指标名必须采用相同类型、Help 和标签名集合；不同量使用不同 Metric，同量的不同逻辑对象和分类用标签表达。注册冲突返回错误，既有值保持原样，调用方应检查错误。
+- 自定义标签可选，名称注册后固定，更新时必须提供完整且一致的键集合；`project`、`instance_id`、`component`、`name` 及 `__` 开头标签保留。标签值应为数量可控的业务分类，避免请求 ID、订单号等无界值。
+- 四个内置健康及日志指标名保留给 SDK。跨类型的外部注册冲突可能由官方 Registry 在采集时才发现，无论外部指标先注册还是后注册；SDK 不通过提前采集来预检，采集失败沿用 HTTP、文件的既有错误处理。
+
+### 更新与生命周期
+
+无业务标签时可以直接 `gauge.Set(value)`，也可传一份空 `Labels`；有业务标签时传一份 `Labels`，多份标签参数返回错误。Set 在调用期间读取标签，调用方应保证此时没有并发修改；返回后修改标签 map 不影响已报告样本。
+
+首次成功 Set 才创建该组标签值的样本，未报告时没有数量样本。后续 Set 覆盖当前值，归零由业务显式报告。数值沿用官方 Gauge 的 float64 语义；当前数量使用 Gauge，累计发生次数使用 Counter。
+
+注册准入在取得 Handler、启动指标出口或首次采集时关闭；此前已获准的并发注册可在这些操作之后完成。已注册句柄仍可更新值及使用已声明标签的新取值。数量值由官方 GaugeVec 唯一维护，不受 `EnableHealthMetrics` 或 `StateEnabled` 的健康开关控制，也不参与 `overall` 汇总。HTTP 和文件出口仍沿用现有的状态配置依赖；状态维护关闭时，可以通过共享 Registry 采集数量指标。
+
+首次 Close 与 Set 建立统一接收截止，后续 Set 或 RegisterGauge 返回 `ErrClosed`。关闭收尾等待此前已获准的注册及必要回滚完成，再进行最终快照。已启动的文件出口在最终快照中保留截止数量值；最终采集无论成功还是失败，管理器都会注销通过组件注册的 Gauge。其他 Manager 及直接注册的业务 Collector 保持原归属和生命周期。New 与 SafeNew 共享同一实现，Gauge 注册到管理器最终生效的 Registry。
 
 ## 共享业务指标
 

@@ -1,4 +1,4 @@
-// Package syslogger 提供本机 syslog 异步交付和组件健康指标。
+// Package syslogger 提供本机 syslog 异步交付、组件健康及数量指标。
 package syslogger
 
 import (

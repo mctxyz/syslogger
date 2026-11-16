@@ -98,3 +98,39 @@ func ExampleManager_Registry() {
 	// true
 	// true
 }
+
+func ExampleComponent_RegisterGauge() {
+	manager, err := syslogger.New(syslogger.Config{
+		Project:      "demo",
+		StateEnabled: true,
+		HTTP:         syslogger.HTTPConfig{Enabled: true},
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer manager.Close(context.Background())
+	worker, err := manager.Register(syslogger.ComponentConfig{Name: "worker"})
+	if err != nil {
+		panic(err)
+	}
+	pending, err := worker.RegisterGauge(syslogger.GaugeConfig{
+		Metric:     "queue_length",
+		Name:       "pending",
+		Help:       "队列当前任务数",
+		LabelNames: []string{"priority"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := pending.Set(42, syslogger.Labels{"priority": "high"}); err != nil {
+		panic(err)
+	}
+	handler, err := manager.Handler()
+	if err != nil {
+		panic(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	fmt.Println(strings.Contains(response.Body.String(), `syslogger_component_queue_length{component="worker",instance_id="common",name="pending",priority="high",project="demo"} 42`))
+	// Output: true
+}

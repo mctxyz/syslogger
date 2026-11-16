@@ -45,7 +45,7 @@ func (m *Manager) Close(ctx context.Context) error {
 }
 
 func (m *Manager) finish(ctx context.Context, components []*Component) {
-	// 启动资格在集合锁内登记；截止后等待已有初始化完成并自行清理。
+	// 初始化资格在集合锁内登记；截止后等待已有注册及出口初始化完成并自行清理。
 	m.starters.Wait()
 	var errs []error
 	if m.server != nil {
@@ -78,7 +78,10 @@ func (m *Manager) finish(ctx context.Context, components []*Component) {
 		close(m.catalogStop)
 		<-m.catalogDone
 	}
-	// 最终快照完成后释放自身注册，业务 Collector 继续由共享表的持有方管理。
+	// 最终快照完成后释放自身注册，直接注册的业务 Collector 继续由共享表的持有方管理。
+	for _, gauge := range m.gauges {
+		m.registry.Unregister(gauge)
+	}
 	m.registry.Unregister(m)
 	if len(errs) == 1 {
 		m.finalErr = errs[0]
